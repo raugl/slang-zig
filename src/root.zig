@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const log = std.log.scoped(.slang);
 
+// TODO: Fixup all type reflection returned types (optionals, errors etc)
 // TODO: Copy over all the doc comments from slang
 // TODO: Create tests for struct sizes and enum tags by reflecting this zig module, generating the
 // c++ code that accesses the appropriate tags/sizeofs, maybe with some name conversion overrides
@@ -709,27 +710,10 @@ pub const UUID = extern struct {
 
 const mcall: std.builtin.CallingConvention = if (builtin.os.tag == .windows) .winapi else .c;
 
-/// The only valid operation to do on a uninitialized COM object is to defer releasing it, resulting
-/// In a noop. Trying to call any other function will result in an immediate segfault.
-const DefaultVTable = extern struct {
-    _pad0: [2]usize = @splat(0),
-    release: *const fn (*IUnknown) callconv(mcall) u32 = &defaultRelease,
-    _pad1: [29]usize = @splat(0),
-
-    const instance = DefaultVTable{};
-
-    fn defaultRelease(self: *IUnknown) callconv(mcall) u32 {
-        _ = self;
-        return 1;
-    }
-};
-
 pub const IUnknown = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x00000000, 0x0000, 0x0000, .{ 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -765,8 +749,6 @@ pub const ICastable = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x87ede0e1, 0x4852, 0x44b0, .{ 0x8b, 0xf2, 0xcb, 0x31, 0x87, 0x4d, 0xe2, 0x39 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -794,8 +776,6 @@ pub const IClonable = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x1ec36168, 0xe9f4, 0x430d, .{ 0xbb, 0x17, 0x4, 0x8a, 0x80, 0x46, 0xb3, 0x1f });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -822,8 +802,7 @@ pub const IBlob = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x8BA5FB08, 0x5195, 0x40e2, .{ 0xAC, 0x58, 0x0D, 0x98, 0x9C, 0x3A, 0x01, 0x02 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
+    pub const init = &default_instance;
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -835,6 +814,22 @@ pub const IBlob = extern struct {
         base: IUnknown.VTable,
         getBufferPointer: *const fn (this: *IBlob) callconv(mcall) ?[*]const u8,
         getBufferSize: *const fn (this: *IBlob) callconv(mcall) usize,
+    };
+
+    var default_instance = IBlob{ .vtable = @ptrCast(&default_vtable) };
+    const default_vtable = DefaultVTable{};
+
+    /// The only valid operation to do on a uninitialized COM object is to defer releasing it, resulting
+    /// in a noop. Trying to call any other function will result in an immediate segfault.
+    const DefaultVTable = extern struct {
+        _pad0: [2]usize = @splat(0),
+        release: *const fn (*IUnknown) callconv(mcall) u32 = &defaultRelease,
+        _pad1: [29]usize = @splat(0),
+
+        fn defaultRelease(self: *IUnknown) callconv(mcall) u32 {
+            _ = self;
+            return 1;
+        }
     };
 
     fn Mixin(comptime T: type) type {
@@ -862,16 +857,12 @@ pub const TerminatedChars = extern struct {
     chars: [1]u8,
 
     pub const uuid = UUID.init(0xbe0db1a8, 0x3594, 0x4603, .{ 0xa7, 0x8b, 0xc4, 0x86, 0x84, 0x30, 0xdf, 0xbb });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 };
 
 pub const IFileSystem = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x003A09FC, 0x3A4D, 0x4BA0, .{ 0xAD, 0x60, 0x1F, 0xD8, 0x63, 0xA9, 0x15, 0xAB });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -902,8 +893,6 @@ pub const ISharedLibrary = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x70dbc7c3, 0xdc3b, 0x4a07, .{ 0xae, 0x7e, 0x75, 0x2a, 0xf6, 0xa8, 0x15, 0x55 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -935,8 +924,6 @@ pub const ISharedLibraryLoader = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x6264ab2b, 0xa3e8, 0x4a06, .{ 0x97, 0xf1, 0x49, 0xbc, 0x2d, 0x2a, 0xb1, 0x4d });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -984,8 +971,6 @@ pub const IFileSystemExt = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x5fb632d2, 0x979d, 0x4481, .{ 0x9f, 0xee, 0x66, 0x3c, 0x3f, 0x14, 0x49, 0xe1 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -1064,8 +1049,6 @@ pub const IMutableFileSystem = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0xa058675c, 0x1d65, 0x452a, .{ 0x84, 0x58, 0xcc, 0xde, 0xd1, 0x42, 0x71, 0x5 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -1133,8 +1116,6 @@ pub const IWriter = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0xec457f0e, 0x9add, 0x4e6b, .{ 0x85, 0x1c, 0xd7, 0xfa, 0x71, 0x6d, 0x15, 0xfd });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -1195,8 +1176,6 @@ pub const IProfiler = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x197772c7, 0x0155, 0x4b91, .{ 0x84, 0xe8, 0x66, 0x68, 0xba, 0xff, 0x06, 0x19 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -1595,8 +1574,6 @@ pub const IGlobalSession = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0xc140b5fd, 0xc78, 0x452e, .{ 0xba, 0x7c, 0x1a, 0x1e, 0x70, 0xc7, 0xf7, 0x1c });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -1950,8 +1927,6 @@ pub const ISession = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x67618701, 0xd116, 0x468f, .{ 0xab, 0x3b, 0x47, 0x4b, 0xed, 0xce, 0xe, 0x3d });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -2146,7 +2121,7 @@ pub const ISession = extern struct {
                 return compile_request;
             }
 
-            fn createTypeConformanceComponentType(self: *T, type_: *TypeReflection, interfaceType: *TypeReflection, conformanceIdOverride: i64, out_diagnostics: ?**IBlob) Result {
+            fn createTypeConformanceComponentType(self: *T, type_: *TypeReflection, interfaceType: *TypeReflection, conformanceIdOverride: i64, out_diagnostics: ?**IBlob) !*ITypeConformance {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
@@ -2203,8 +2178,6 @@ pub const IMetadata = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init();
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -2240,8 +2213,6 @@ pub const ICompileResult = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init();
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -2286,8 +2257,6 @@ pub const IComponentType = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x5bc42be8, 0x5c50, 0x4929, .{ 0x9e, 0x5e, 0xd1, 0x5e, 0x7c, 0x24, 0x1, 0x5f });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -2444,8 +2413,6 @@ pub const IEntryPoint = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x8f241361, 0xf5bd, 0x4ca0, .{ 0xa3, 0xac, 0x2, 0xf7, 0xfa, 0x24, 0x2, 0xb8 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -2484,8 +2451,6 @@ pub const ITypeConformance = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x73eb3147, 0xe544, 0x41b5, .{ 0xb8, 0xf0, 0xa2, 0x44, 0xdf, 0x21, 0x94, 0xb });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     const VTable = IComponentType.VTable;
     const Mixin = IComponentType.Mixin;
@@ -2495,8 +2460,6 @@ pub const IComponentType2 = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x9c2a4b3d, 0x7f68, 0x4e91, .{ 0xa5, 0x2c, 0x8b, 0x19, 0x3e, 0x45, 0x7a, 0x9f });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -2537,8 +2500,6 @@ pub const IModule = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0xc720e64, 0x8722, 0x4d31, .{ 0x89, 0x90, 0x63, 0x8a, 0x98, 0xb1, 0xc2, 0x79 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
@@ -2678,8 +2639,6 @@ pub const IModulePrecompileService_Experimental = extern struct {
     vtable: *const VTable,
 
     pub const uuid = UUID.init(0x8e12e8e3, 0x5fcd, 0x433e, .{ 0xaf, 0xcb, 0x13, 0xa0, 0x88, 0xbc, 0x5e, 0xe5 });
-    pub const init = &instance;
-    var instance = @This(){ .vtable = @ptrCast(&DefaultVTable.instance) };
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
