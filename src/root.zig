@@ -1,9 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const log = std.log.scoped(.slang);
+const cstring = [*:0]const u8;
 
 // TODO: Fixup all type reflection returned types (optionals, errors etc)
 // TODO: Copy over all the doc comments from slang
+// TODO: Turn all parameter names to snake_case
 // TODO: Create tests for struct sizes and enum tags by reflecting this zig module, generating the
 // c++ code that accesses the appropriate tags/sizeofs, maybe with some name conversion overrides
 // for edge cases, and pass them back to zig via FFI. Write the actual assertion tests on the zig
@@ -1219,9 +1221,7 @@ pub const IProfiler = extern struct {
 };
 
 /// Deprecated
-pub const ICompileRequest = extern struct {
-    vtable: *const anyopaque,
-};
+pub const ICompileRequest = opaque {};
 
 pub const DiagnosticsCallback = *const fn (message: [*:0]const u8, user_data: ?*anyopaque) callconv(.c) void;
 
@@ -1241,16 +1241,13 @@ pub const getBuildTagString = spGetBuildTagString;
 
 extern fn spGetBuildTagString() [*:0]const u8;
 
-// TODO:
-pub const ReflectionType = opaque {};
-
-pub const ReflectionGenericArg = extern union {
-    type_val: *ReflectionType,
+pub const GenericArgReflection = extern union {
+    type_val: *TypeReflection,
     int_val: i64,
     bool_val: bool,
 };
 
-pub const ReflectionGenericArgType = enum(i32) {
+pub const GenericArgType = enum(i32) {
     type = 0,
     int = 1,
     bool = 2,
@@ -1343,6 +1340,221 @@ pub const ResourceAccess = enum(u32) {
     write,
     feedback,
     unknown = 0x7fffffff,
+};
+
+pub const LayoutRules = enum(u32) {
+    default,
+    metal_argument_buffer_tier_2,
+};
+
+pub const ImageFormat = enum(u32) {
+    unknown = 0,
+    rgba32f,
+    rgba16f,
+    rg32f,
+    rg16f,
+    r11f_g11f_b10f,
+    r32f,
+    r16f,
+    rgba16,
+    rgb10_a2,
+    rgba8,
+    rg16,
+    rg8,
+    r16,
+    r8,
+    rgba16_snorm,
+    rgba8_snorm,
+    rg16_snorm,
+    rg8_snorm,
+    r16_snorm,
+    r8_snorm,
+    rgba32i,
+    rgba16i,
+    rgba8i,
+    rg32i,
+    rg16i,
+    rg8i,
+    r32i,
+    r16i,
+    r8i,
+    rgba32ui,
+    rgba16ui,
+    rgb10_a2ui,
+    rgba8ui,
+    rg32ui,
+    rg16ui,
+    rg8ui,
+    r32ui,
+    r16ui,
+    r8ui,
+    r64ui,
+    r64i,
+    bgra8,
+};
+
+pub const UNBOUNDED_SIZE = std.math.maxInt(usize);
+
+pub const Attribute = opaque {
+    pub fn getName(self: *Attribute) cstring {
+        return spReflectionUserAttribute_GetName(self);
+    }
+
+    pub fn getArgumentCount(self: *Attribute) u32 {
+        return spReflectionUserAttribute_GetArgumentCount(self);
+    }
+
+    pub fn getArgumentType(self: *Attribute, index: u32) *TypeReflection {
+        return spReflectionUserAttribute_GetArgumentType(self, index);
+    }
+
+    pub fn getArgumentValueInt(self: *Attribute, index: u32) !i32 {
+        var result: i32 = undefined;
+        try spReflectionUserAttribute_GetArgumentValueInt(self, index, &result).check();
+        return result;
+    }
+
+    pub fn getArgumentValueFloat(self: *Attribute, index: u32) !f32 {
+        var result: f32 = undefined;
+        try spReflectionUserAttribute_GetArgumentValueFloat(self, index, &result).check();
+        return result;
+    }
+
+    pub fn getArgumentValueString(self: *Attribute, index: u32) ?[*]const u8 {
+        var size: usize = undefined;
+        const bytes = spReflectionUserAttribute_GetArgumentValueString(self, index, &size) orelse return null;
+        return bytes[0..size];
+    }
+
+    extern fn spReflectionUserAttribute_GetName(attrib: *Attribute) cstring;
+    extern fn spReflectionUserAttribute_GetArgumentCount(attrib: *Attribute) u32;
+    extern fn spReflectionUserAttribute_GetArgumentType(attrib: *Attribute, index: u32) *TypeReflection;
+    extern fn spReflectionUserAttribute_GetArgumentValueInt(attrib: *Attribute, index: u32, rs: *i32) Result;
+    extern fn spReflectionUserAttribute_GetArgumentValueFloat(attrib: *Attribute, index: u32, rs: *f32) Result;
+    extern fn spReflectionUserAttribute_GetArgumentValueString(attrib: *Attribute, index: u32, out_size: *usize) ?[*]const u8;
+};
+pub const UserAttribute = Attribute;
+
+pub const TypeReflection = opaque {
+    pub fn getKind(self: *TypeReflection) TypeKind {
+        return spReflectionType_GetKind(self);
+    }
+
+    pub fn getUserAttributeCount(self: *TypeReflection) u32 {
+        return spReflectionType_GetUserAttributeCount(self);
+    }
+
+    pub fn getUserAttributeByIndex(self: *TypeReflection, index: u32) *UserAttribute {
+        return spReflectionType_GetUserAttribute(self, index);
+    }
+
+    pub fn findUserAttributeByName(self: *TypeReflection, name: cstring) *UserAttribute {
+        return spReflectionType_FindUserAttributeByName(self, name);
+    }
+
+    pub const findAttributeByName = findUserAttributeByName;
+
+    pub fn applySpecializations(self: *TypeReflection, generic: *GenericReflection) *TypeReflection {
+        return spReflectionType_applySpecializations(self, generic);
+    }
+
+    /// only useful if `getKind() == .@"struct"`
+    pub fn getFieldCount(self: *TypeReflection) u32 {
+        return spReflectionType_GetFieldCount(self);
+    }
+
+    pub fn getFieldByIndex(self: *TypeReflection, index: u32) *VariableReflection {
+        return spReflectionType_GetFieldByIndex(self, index);
+    }
+
+    pub fn isArray(self: *TypeReflection) bool {
+        return self.getKind() == .array;
+    }
+
+    pub fn unwrapArray(self: *TypeReflection) *TypeReflection {
+        var ptr = self;
+        while (ptr.isArray()) {
+            ptr = ptr.getElementType();
+        }
+        return ptr;
+    }
+
+    /// only usefull if `getKind() == .array`
+    pub fn getElementCount(self: *TypeReflection, reflection: ?*ShaderReflection) usize {
+        return spReflectionType_GetSpecializedElementCount(self, reflection);
+    }
+
+    pub fn getTotalArrayElementCount(self: *TypeReflection) usize {
+        var result: usize = 0;
+        var ptr = self;
+        while (ptr.isArray()) {
+            result *= ptr.getElementCount();
+            ptr = ptr.getElementType();
+        }
+        return result;
+    }
+
+    pub fn getElementType(self: *TypeReflection) *TypeReflection {
+        return spReflectionType_GetElementType(self);
+    }
+
+    pub fn getRowCount(self: *TypeReflection) u32 {
+        return spReflectionType_GetRowCount(self);
+    }
+
+    pub fn getColumnCount(self: *TypeReflection) u32 {
+        return spReflectionType_GetColumnCount(self);
+    }
+
+    pub fn getScalarType(self: *TypeReflection) ScalarType {
+        return spReflectionType_GetScalarType(self);
+    }
+
+    pub fn getResourceShape(self: *TypeReflection) ResourceShape {
+        return spReflectionType_GetResourceShape(self);
+    }
+
+    pub fn getResourceAccess(self: *TypeReflection) ResourceAccess {
+        return spReflectionType_GetResourceAccess(self);
+    }
+
+    pub fn getResourceResultType(self: *TypeReflection) *TypeReflection {
+        return spReflectionType_GetResourceResultType(self);
+    }
+
+    pub fn getName(self: *TypeReflection) cstring {
+        return spReflectionType_GetName(self);
+    }
+
+    pub fn getFullName(self: *TypeReflection) !*IBlob {
+        var name: *IBlob = undefined;
+        try spReflectionType_GetFullName(self, &name).check();
+        return name;
+    }
+
+    pub fn getGenericContainer(self: *TypeReflection) *GenericReflection {
+        return spReflectionType_GetGenericContainer(self);
+    }
+
+    extern fn spReflectionType_GetKind(self: *TypeReflection) TypeKind;
+    extern fn spReflectionType_GetUserAttributeCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetUserAttribute(self: *TypeReflection, index: u32) *UserAttribute;
+    extern fn spReflectionType_FindUserAttributeByName(self: *TypeReflection, name: cstring) *UserAttribute;
+    extern fn spReflectionType_applySpecializations(self: *TypeReflection, generic: *GenericReflection) *TypeReflection;
+    extern fn spReflectionType_GetFieldCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetFieldByIndex(self: *TypeReflection, index: u32) *VariableReflection;
+    extern fn spReflectionType_GetElementCount(self: *TypeReflection) usize;
+    extern fn spReflectionType_GetSpecializedElementCount(self: *TypeReflection, reflection: *ShaderReflection) usize;
+    extern fn spReflectionType_GetElementType(self: *TypeReflection) *TypeReflection;
+    extern fn spReflectionType_GetRowCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetColumnCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetScalarType(self: *TypeReflection) ScalarType;
+    extern fn spReflectionType_GetResourceShape(self: *TypeReflection) ResourceShape;
+    extern fn spReflectionType_GetResourceAccess(self: *TypeReflection) ResourceAccess;
+    extern fn spReflectionType_GetResourceResultType(self: *TypeReflection) *TypeReflection;
+    extern fn spReflectionType_GetName(self: *TypeReflection) cstring;
+    extern fn spReflectionType_GetFullName(self: *TypeReflection, out_name_blob: **IBlob) Result;
+    extern fn spReflectionType_GetGenericContainer(self: *TypeReflection) *GenericReflection;
 };
 
 pub const ParameterCategory = enum(u32) {
@@ -1449,9 +1661,272 @@ pub const BindingType = enum(u32) {
     const ext_mask = 0xff00;
 };
 
-pub const LayoutRules = enum(u32) {
-    default,
-    metal_argument_buffer_tier_2,
+pub const TypeLayoutReflection = opaque {
+    pub fn getType(self: *TypeLayoutReflection) *TypeReflection {
+        return spReflectionTypeLayout_GetType(self);
+    }
+
+    pub fn getKind(self: *TypeLayoutReflection) TypeReflection.Kind {
+        return spReflectionTypeLayout_getKind(self);
+    }
+
+    pub fn getSize(self: *TypeLayoutReflection, category: ParameterCategory) usize {
+        return spReflectionTypeLayout_GetSize(self, category);
+    }
+
+    pub fn getStride(self: *TypeLayoutReflection, category: ParameterCategory) usize {
+        return spReflectionTypeLayout_GetStride(self, category);
+    }
+
+    pub fn getAlignment(self: *TypeLayoutReflection, category: ParameterCategory) i32 {
+        return spReflectionTypeLayout_getAlignment(self, category);
+    }
+
+    pub fn getFieldCount(self: *TypeLayoutReflection) u32 {
+        return spReflectionTypeLayout_GetFieldCount(self);
+    }
+
+    pub fn getFieldByIndex(self: *TypeLayoutReflection, index: u32) *VariableLayoutReflection {
+        return spReflectionTypeLayout_GetFieldByIndex(self, index);
+    }
+
+    pub fn findFieldIndexByName(self: *TypeLayoutReflection, name: []const u8) i64 {
+        const end: [*]const u8 = @ptrFromInt(@intFromPtr(name.ptr) + name.len);
+        return spReflectionTypeLayout_findFieldIndexByName(self, name.ptr, end);
+    }
+
+    pub fn getExplicitCounter(self: *TypeLayoutReflection) *VariableLayoutReflection {
+        return spReflectionTypeLayout_GetExplicitCounter(self);
+    }
+
+    pub fn isArray(self: *TypeLayoutReflection) bool {
+        return self.getType().isArray();
+    }
+
+    pub fn unwrapArray(self: *TypeLayoutReflection) *TypeLayoutReflection {
+        var ptr = self;
+        while (ptr.isArray()) {
+            ptr = ptr.getElementTypeLayout();
+        }
+        return ptr;
+    }
+
+    /// only useful if `getKind() == .array`
+    pub fn getElementCount(self: *TypeLayoutReflection, reflection: ?*ShaderReflection) usize {
+        return self.getType().getElementCount(reflection);
+    }
+
+    pub fn getTotalArrayElementCount(self: *TypeLayoutReflection) usize {
+        return self.getType().getTotalArrayElementCount();
+    }
+
+    pub fn getElementStride(self: *TypeLayoutReflection, category: ParameterCategory) usize {
+        return spReflectionTypeLayout_GetElementStride(self, category);
+    }
+
+    pub fn getElementTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection {
+        return spReflectionTypeLayout_GetElementTypeLayout(self);
+    }
+
+    pub fn getElementVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection {
+        return spReflectionTypeLayout_GetElementVarLayout(self);
+    }
+
+    pub fn getContainerVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection {
+        return spReflectionTypeLayout_getContainerVarLayout(self);
+    }
+
+    pub fn getParameterCategory(self: *TypeLayoutReflection) ParameterCategory {
+        return spReflectionTypeLayout_GetParameterCategory(self);
+    }
+
+    pub fn getCategoryCount(self: *TypeLayoutReflection) u32 {
+        return spReflectionTypeLayout_GetCategoryCount(self);
+    }
+
+    pub fn getCategoryByIndex(self: *TypeLayoutReflection, index: u32) ParameterCategory {
+        return spReflectionTypeLayout_GetCategoryByIndex(self, index);
+    }
+
+    pub fn getRowCount(self: *TypeLayoutReflection) u32 {
+        return self.getType().getRowCount();
+    }
+
+    pub fn getColumnCount(self: *TypeLayoutReflection) u32 {
+        return self.getType().getColumnCount();
+    }
+
+    pub fn getScalarType(self: *TypeLayoutReflection) TypeReflection.ScalarType {
+        return self.getType().getScalarType();
+    }
+
+    pub fn getResourceResultType(self: *TypeLayoutReflection) *TypeReflection {
+        return self.getType().getResourceResultType();
+    }
+
+    pub fn getResourceShape(self: *TypeLayoutReflection) ResourceShape {
+        return self.getType().getResourceShape();
+    }
+
+    pub fn getResourceAccess(self: *TypeLayoutReflection) ResourceAccess {
+        return self.getType().getResourceAccess();
+    }
+
+    pub fn getName(self: *TypeLayoutReflection) [*:0]const u8 {
+        return self.getType().getName();
+    }
+
+    pub fn getMatrixLayoutMode(self: *TypeLayoutReflection) MatrixLayoutMode {
+        return spReflectionTypeLayout_GetMatrixLayoutMode(self);
+    }
+
+    pub fn getGenericParamIndex(self: *TypeLayoutReflection) i32 {
+        return spReflectionTypeLayout_getGenericParamIndex(self);
+    }
+
+    pub fn getPendingDataTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection {
+        return spReflectionTypeLayout_getPendingDataTypeLayout(self);
+    }
+
+    pub fn getSpecializedTypePendingDataVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection {
+        return spReflectionTypeLayout_getSpecializedTypePendingDataVarLayout(self);
+    }
+
+    pub fn getBindingRangeCount(self: *TypeLayoutReflection) i64 {
+        return spReflectionTypeLayout_getBindingRangeCount(self);
+    }
+
+    pub fn getBindingRangeType(self: *TypeLayoutReflection, index: i64) BindingType {
+        return spReflectionTypeLayout_getBindingRangeType(self, index);
+    }
+
+    pub fn isBindingRangeSpecializable(self: *TypeLayoutReflection, index: i64) bool {
+        return spReflectionTypeLayout_isBindingRangeSpecializable(self, index) != 0;
+    }
+
+    pub fn getBindingRangeBindingCount(self: *TypeLayoutReflection, index: i64) i64 {
+        return spReflectionTypeLayout_getBindingRangeBindingCount(self, index);
+    }
+
+    pub fn getFieldBindingRangeOffset(self: *TypeLayoutReflection, field_index: i64) i64 {
+        return spReflectionTypeLayout_getFieldBindingRangeOffset(self, field_index);
+    }
+
+    pub fn getExplicitCounterBindingRangeOffset(self: *TypeLayoutReflection) i64 {
+        return spReflectionTypeLayout_getExplicitCounterBindingRangeOffset(self);
+    }
+
+    pub fn getBindingRangeLeafTypeLayout(self: *TypeLayoutReflection, index: i64) *TypeLayoutReflection {
+        return spReflectionTypeLayout_getBindingRangeLeafTypeLayout(self, index);
+    }
+
+    pub fn getBindingRangeLeafVariable(self: *TypeLayoutReflection, index: i64) *VariableReflection {
+        return spReflectionTypeLayout_getBindingRangeLeafVariable(self, index);
+    }
+
+    pub fn getBindingRangeImageFormat(self: *TypeLayoutReflection, index: i64) ImageFormat {
+        return spReflectionTypeLayout_getBindingRangeImageFormat(self, index);
+    }
+
+    pub fn getBindingRangeDescriptorSetIndex(self: *TypeLayoutReflection, index: i64) i64 {
+        return spReflectionTypeLayout_getBindingRangeDescriptorSetIndex(self, index);
+    }
+
+    pub fn getBindingRangeFirstDescriptorRangeIndex(self: *TypeLayoutReflection, index: i64) i64 {
+        return spReflectionTypeLayout_getBindingRangeFirstDescriptorRangeIndex(self, index);
+    }
+
+    pub fn getBindingRangeDescriptorRangeCount(self: *TypeLayoutReflection, index: i64) i64 {
+        return spReflectionTypeLayout_getBindingRangeDescriptorRangeCount(self, index);
+    }
+
+    pub fn getDescriptorSetCount(self: *TypeLayoutReflection) i64 {
+        return spReflectionTypeLayout_getDescriptorSetCount(self);
+    }
+
+    pub fn getDescriptorSetSpaceOffset(self: *TypeLayoutReflection, set_index: i64) i64 {
+        return spReflectionTypeLayout_getDescriptorSetSpaceOffset(self, set_index);
+    }
+
+    pub fn getDescriptorSetDescriptorRangeCount(self: *TypeLayoutReflection, set_index: i64) i64 {
+        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeCount(self, set_index);
+    }
+
+    pub fn getDescriptorSetDescriptorRangeIndexOffset(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64 {
+        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeIndexOffset(self, set_index, range_index);
+    }
+
+    pub fn getDescriptorSetDescriptorRangeDescriptorCount(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64 {
+        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeDescriptorCount(self, set_index, range_index);
+    }
+
+    pub fn getDescriptorSetDescriptorRangeType(self: *TypeLayoutReflection, set_index: i64, range_index: i64) BindingType {
+        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeType(self, set_index, range_index);
+    }
+
+    pub fn getDescriptorSetDescriptorRangeCategory(self: *TypeLayoutReflection, set_index: i64, range_index: i64) ParameterCategory {
+        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeCategory(self, set_index, range_index);
+    }
+
+    pub fn getSubObjectRangeCount(self: *TypeLayoutReflection) i64 {
+        return spReflectionTypeLayout_getSubObjectRangeCount(self);
+    }
+
+    pub fn getSubObjectRangeBindingRangeIndex(self: *TypeLayoutReflection, sub_object_range_index: i64) i64 {
+        return spReflectionTypeLayout_getSubObjectRangeBindingRangeIndex(self, sub_object_range_index);
+    }
+
+    pub fn getSubObjectRangeSpaceOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) i64 {
+        return spReflectionTypeLayout_getSubObjectRangeSpaceOffset(self, sub_object_range_index);
+    }
+
+    pub fn getSubObjectRangeOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) *VariableLayoutReflection {
+        return spReflectionTypeLayout_getSubObjectRangeOffset(self, sub_object_range_index);
+    }
+
+    extern fn spReflectionTypeLayout_GetType(self: *TypeLayoutReflection) *TypeReflection;
+    extern fn spReflectionTypeLayout_getKind(self: *TypeLayoutReflection) TypeReflection.Kind;
+    extern fn spReflectionTypeLayout_GetSize(self: *TypeLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionTypeLayout_GetStride(self: *TypeLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionTypeLayout_getAlignment(self: *TypeLayoutReflection, category: ParameterCategory) i32;
+    extern fn spReflectionTypeLayout_GetFieldCount(self: *TypeLayoutReflection) u32;
+    extern fn spReflectionTypeLayout_GetFieldByIndex(self: *TypeLayoutReflection, index: u32) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_findFieldIndexByName(self: *TypeLayoutReflection, name_begin: [*]const u8, name_end: [*]const u8) i64;
+    extern fn spReflectionTypeLayout_GetExplicitCounter(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_GetElementStride(self: *TypeLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionTypeLayout_GetElementTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection;
+    extern fn spReflectionTypeLayout_GetElementVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_getContainerVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_GetParameterCategory(self: *TypeLayoutReflection) ParameterCategory;
+    extern fn spReflectionTypeLayout_GetCategoryCount(self: *TypeLayoutReflection) u32;
+    extern fn spReflectionTypeLayout_GetCategoryByIndex(self: *TypeLayoutReflection, index: u32) ParameterCategory;
+    extern fn spReflectionTypeLayout_GetMatrixLayoutMode(self: *TypeLayoutReflection) MatrixLayoutMode;
+    extern fn spReflectionTypeLayout_getGenericParamIndex(self: *TypeLayoutReflection) i32;
+    extern fn spReflectionTypeLayout_getPendingDataTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection;
+    extern fn spReflectionTypeLayout_getSpecializedTypePendingDataVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_getBindingRangeCount(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeType(self: *TypeLayoutReflection, index: i64) BindingType;
+    extern fn spReflectionTypeLayout_isBindingRangeSpecializable(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeBindingCount(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeLeafTypeLayout(self: *TypeLayoutReflection, index: i64) *TypeLayoutReflection;
+    extern fn spReflectionTypeLayout_getBindingRangeLeafVariable(self: *TypeLayoutReflection, index: i64) *VariableReflection;
+    extern fn spReflectionTypeLayout_getBindingRangeImageFormat(self: *TypeLayoutReflection, index: i64) ImageFormat;
+    extern fn spReflectionTypeLayout_getFieldBindingRangeOffset(self: *TypeLayoutReflection, field_index: i64) i64;
+    extern fn spReflectionTypeLayout_getExplicitCounterBindingRangeOffset(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeDescriptorSetIndex(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeFirstDescriptorRangeIndex(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeDescriptorRangeCount(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetCount(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetSpaceOffset(self: *TypeLayoutReflection, set_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeCount(self: *TypeLayoutReflection, set_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeIndexOffset(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeDescriptorCount(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeType(self: *TypeLayoutReflection, set_index: i64, range_index: i64) BindingType;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeCategory(self: *TypeLayoutReflection, set_index: i64, range_index: i64) ParameterCategory;
+    extern fn spReflectionTypeLayout_getSubObjectRangeCount(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getSubObjectRangeBindingRangeIndex(self: *TypeLayoutReflection, sub_object_range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getSubObjectRangeSpaceOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getSubObjectRangeOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) *VariableLayoutReflection;
 };
 
 pub const ModifierID = enum(u32) {
@@ -1468,87 +1943,665 @@ pub const ModifierID = enum(u32) {
     inout,
 };
 
-pub const ImageFormat = enum(u32) {
-    unknown = 0,
-    rgba32f,
-    rgba16f,
-    rg32f,
-    rg16f,
-    r11f_g11f_b10f,
-    r32f,
-    r16f,
-    rgba16,
-    rgb10_a2,
-    rgba8,
-    rg16,
-    rg8,
-    r16,
-    r8,
-    rgba16_snorm,
-    rgba8_snorm,
-    rg16_snorm,
-    rg8_snorm,
-    r16_snorm,
-    r8_snorm,
-    rgba32i,
-    rgba16i,
-    rgba8i,
-    rg32i,
-    rg16i,
-    rg8i,
-    r32i,
-    r16i,
-    r8i,
-    rgba32ui,
-    rgba16ui,
-    rgb10_a2ui,
-    rgba8ui,
-    rg32ui,
-    rg16ui,
-    rg8ui,
-    r32ui,
-    r16ui,
-    r8ui,
-    r64ui,
-    r64i,
-    bgra8,
-};
+pub const Modifier = opaque {};
 
-const umbounded_size = std.math.maxInt(usize);
-
-// =============================================================================
-// TODO: reflection api, #include deprecated.h
-// =============================================================================
-const ProgramLayout = extern struct {
-    _pad0: [1]u8,
-
-    fn entryPointCount(self: ProgramLayout) u32 {
-        _ = self;
-        return 1;
+pub const VariableReflection = opaque {
+    pub fn getName(self: *VariableReflection) cstring {
+        return spReflectionVariable_GetName(self);
     }
 
-    fn parameterCount(self: ProgramLayout) u32 {
-        _ = self;
-        return 3;
+    pub fn getType(self: *VariableReflection) *TypeReflection {
+        return spReflectionVariable_GetType(self);
     }
+
+    pub fn findModifier(self: *VariableReflection, id: ModifierID) *Modifier {
+        return spReflectionVariable_FindModifier(self, id);
+    }
+
+    pub fn getUserAttributeCount(self: *VariableReflection) u32 {
+        return spReflectionVariable_GetUserAttributeCount(self);
+    }
+
+    pub fn getUserAttributeByIndex(self: *VariableReflection, index: u32) *UserAttribute {
+        return spReflectionVariable_GetUserAttribute(self, index);
+    }
+
+    pub fn findUserAttributeByName(self: *VariableReflection, global_session: *IGlobalSession, name: cstring) *UserAttribute {
+        return spReflectionVariable_FindUserAttributeByName(self, global_session, name);
+    }
+    pub const findAttributeByName = findUserAttributeByName;
+
+    pub fn hasDefaultValue(self: *VariableReflection) bool {
+        return spReflectionVariable_HasDefaultValue(self);
+    }
+
+    pub fn getDefaultValueInt(self: *VariableReflection) !i64 {
+        var result: i64 = undefined;
+        try spReflectionVariable_GetDefaultValueInt(self, &result).check();
+        return result;
+    }
+
+    pub fn getGenericContainer(self: *VariableReflection) *GenericReflection {
+        return spReflectionVariable_GetGenericContainer(self);
+    }
+
+    pub fn applySpecializations(self: *VariableReflection, generic: *GenericReflection) *VariableReflection {
+        return spReflectionVariable_applySpecializations(self, generic);
+    }
+
+    extern fn spReflectionVariable_GetName(self: *VariableReflection) cstring;
+    extern fn spReflectionVariable_GetType(self: *VariableReflection) *TypeReflection;
+    extern fn spReflectionVariable_FindModifier(self: *VariableReflection, id: ModifierID) *Modifier;
+    extern fn spReflectionVariable_GetUserAttributeCount(self: *VariableReflection) u32;
+    extern fn spReflectionVariable_GetUserAttribute(self: *VariableReflection, index: u32) *UserAttribute;
+    extern fn spReflectionVariable_FindUserAttributeByName(self: *VariableReflection, global_session: *IGlobalSession, name: cstring) *UserAttribute;
+    extern fn spReflectionVariable_HasDefaultValue(self: *VariableReflection) bool;
+    extern fn spReflectionVariable_GetDefaultValueInt(self: *VariableReflection, rs: *i64) Result;
+    extern fn spReflectionVariable_GetGenericContainer(self: *VariableReflection) *GenericReflection;
+    extern fn spReflectionVariable_applySpecializations(self: *VariableReflection, generic: *GenericReflection) *VariableReflection;
 };
 
-const FunctionReflection = extern struct {
-    _pad0: [1]u8,
+pub const VariableLayoutReflection = opaque {
+    pub fn getVariable(self: *VariableLayoutReflection) *VariableReflection {
+        return spReflectionVariableLayout_GetVariable(self);
+    }
+
+    pub fn getName(self: *VariableLayoutReflection) cstring {
+        return self.getVariable().getName();
+    }
+
+    pub fn findModifier(self: *VariableLayoutReflection, id: ModifierID) *Modifier {
+        return self.getVariable().findModifier(id);
+    }
+
+    pub fn getTypeLayout(self: *VariableLayoutReflection) *TypeLayoutReflection {
+        return spReflectionVariableLayout_GetTypeLayout(self);
+    }
+
+    pub fn getCategory(self: *VariableLayoutReflection) *TypeLayoutReflection {
+        return self.getTypeLayout().getParameterCategory();
+    }
+
+    pub fn getCategoryCount(self: *VariableLayoutReflection) u32 {
+        return self.getTypeLayout().getCategoryCount();
+    }
+
+    pub fn getCategoryByIndex(self: *VariableLayoutReflection, index: u32) *TypeLayoutReflection {
+        return self.getTypeLayout().getCategoryByIndex(index);
+    }
+
+    pub fn getOffset(self: *VariableLayoutReflection, category: ParameterCategory) usize {
+        return spReflectionVariableLayout_GetOffset(self, category);
+    }
+
+    pub fn getType(self: *VariableLayoutReflection) *TypeReflection {
+        return self.getVariable().getType();
+    }
+
+    pub fn getBindingIndex(self: *VariableLayoutReflection) u32 {
+        return spReflectionParameter_GetBindingIndex(self);
+    }
+
+    // pub fn getBindingSpace(self: *VariableLayoutReflection) u32 {
+    //     return spReflectionParameter_GetBindingSpace(self);
+    // }
+
+    pub fn getBindingSpace(self: *VariableLayoutReflection, category: ParameterCategory) usize {
+        return spReflectionVariableLayout_GetSpace(self, category);
+    }
+
+    pub fn getImageFormat(self: *VariableLayoutReflection) ImageFormat {
+        return spReflectionVariableLayout_GetImageFormat(self);
+    }
+
+    pub fn getSemanticName(self: *VariableLayoutReflection) cstring {
+        return spReflectionVariableLayout_GetSemanticName(self);
+    }
+
+    pub fn getSemanticIndex(self: *VariableLayoutReflection) usize {
+        return spReflectionVariableLayout_GetSemanticIndex(self);
+    }
+
+    pub fn getStage(self: *VariableLayoutReflection) usize {
+        return spReflectionVariableLayout_getStage(self);
+    }
+
+    pub fn getPendingDataLayout(self: *VariableLayoutReflection) *VariableLayoutReflection {
+        return spReflectionVariableLayout_getPendingDataLayout(self);
+    }
+
+    extern fn spReflectionVariableLayout_GetVariable(self: *VariableLayoutReflection) *VariableReflection;
+    extern fn spReflectionVariableLayout_GetTypeLayout(self: *VariableLayoutReflection) *TypeLayoutReflection;
+    extern fn spReflectionVariableLayout_GetOffset(self: *VariableLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionVariableLayout_GetSpace(self: *VariableLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionVariableLayout_GetImageFormat(self: *VariableLayoutReflection) ImageFormat;
+    extern fn spReflectionVariableLayout_GetSemanticName(self: *VariableLayoutReflection) cstring;
+    extern fn spReflectionVariableLayout_GetSemanticIndex(self: *VariableLayoutReflection) usize;
+
+    extern fn spReflectionVariableLayout_getStage(self: *VariableLayoutReflection) Stage;
+    extern fn spReflectionVariableLayout_getPendingDataLayout(self: *VariableLayoutReflection) *VariableLayoutReflection;
+
+    extern fn spReflectionParameter_GetBindingIndex(self: *VariableLayoutReflection) u32;
+    extern fn spReflectionParameter_GetBindingSpace(self: *VariableLayoutReflection) u32;
 };
 
-const DeclReflection = extern struct {
-    _pad0: [1]u8,
+pub const FunctionReflection = opaque {
+    pub fn getName(self: *FunctionReflection) cstring {
+        return spReflectionFunction_GetName(self);
+    }
+
+    pub fn getReturnType(self: *FunctionReflection) *TypeReflection {
+        return spReflectionFunction_GetResultType(self);
+    }
+
+    pub fn getParameterCount(self: *FunctionReflection) u32 {
+        return spReflectionFunction_GetParameterCount(self);
+    }
+
+    pub fn getParameterByIndex(self: *FunctionReflection, index: u32) *VariableReflection {
+        return spReflectionFunction_GetParameter(self, index);
+    }
+
+    pub fn getUserAttributeCount(self: *FunctionReflection) u32 {
+        return spReflectionFunction_GetUserAttributeCount(self);
+    }
+
+    pub fn getUserAttributeByIndex(self: *FunctionReflection, index: u32) *UserAttribute {
+        return spReflectionFunction_GetUserAttribute(self, index);
+    }
+
+    pub fn findUserAttributeByName(self: *FunctionReflection, global_session: *ISession, name: cstring) *UserAttribute {
+        return spReflectionFunction_FindUserAttributeByName(self, global_session, name);
+    }
+
+    pub fn findModifier(self: *FunctionReflection, id: ModifierID) *Modifier {
+        return spReflectionFunction_FindModifier(self, id);
+    }
+
+    pub fn getGenericContainer(self: *FunctionReflection) *GenericReflection {
+        return spReflectionFunction_GetGenericContainer(self);
+    }
+
+    pub fn applySpecializations(self: *FunctionReflection, generic: *GenericReflection) *FunctionReflection {
+        return spReflectionFunction_applySpecializations(self, generic);
+    }
+
+    pub fn specializeWithArgTypes(self: *FunctionReflection, arg_types: []const *TypeReflection) *FunctionReflection {
+        return spReflectionFunction_specializeWithArgTypes(self, @intCast(arg_types.len), arg_types.ptr);
+    }
+
+    pub fn isOverloaded(self: *FunctionReflection) bool {
+        return spReflectionFunction_isOverloaded(self);
+    }
+
+    pub fn getOverloadCount(self: *FunctionReflection) u32 {
+        return spReflectionFunction_getOverloadCount(self);
+    }
+
+    pub fn getOverload(self: *FunctionReflection, index: u32) *FunctionReflection {
+        return spReflectionFunction_getOverload(self, index);
+    }
+
+    extern fn spReflectionFunction_GetName(self: *FunctionReflection) cstring;
+    extern fn spReflectionFunction_FindModifier(self: *FunctionReflection, id: ModifierID) *Modifier;
+    extern fn spReflectionFunction_GetUserAttributeCount(self: *FunctionReflection) u32;
+    extern fn spReflectionFunction_GetUserAttribute(self: *FunctionReflection, index: u32) *UserAttribute;
+    extern fn spReflectionFunction_FindUserAttributeByName(self: *FunctionReflection, global_session: *ISession, name: cstring) *UserAttribute;
+    extern fn spReflectionFunction_GetParameterCount(self: *FunctionReflection) u32;
+    extern fn spReflectionFunction_GetParameter(self: *FunctionReflection, index: u32) *VariableReflection;
+    extern fn spReflectionFunction_GetResultType(self: *FunctionReflection) *TypeReflection;
+    extern fn spReflectionFunction_GetGenericContainer(self: *FunctionReflection) *GenericReflection;
+    extern fn spReflectionFunction_applySpecializations(self: *FunctionReflection, generic: *GenericReflection) *FunctionReflection;
+    extern fn spReflectionFunction_specializeWithArgTypes(self: *FunctionReflection, arg_type_count: i64, arg_types: [*]const *TypeReflection) *FunctionReflection;
+    extern fn spReflectionFunction_isOverloaded(self: *FunctionReflection) bool;
+    extern fn spReflectionFunction_getOverloadCount(self: *FunctionReflection) u32;
+    extern fn spReflectionFunction_getOverload(self: *FunctionReflection, index: u32) *FunctionReflection;
 };
 
-const TypeReflection = extern struct {
-    extern fn spReflectionType_GetKind(type: *TypeReflection) TypeKind;
+pub const GenericReflection = opaque {
+    pub fn asDecl(self: *GenericReflection) *DeclReflection {
+        return spReflectionGeneric_asDecl(self);
+    }
 
-    extern fn spReflectionType_GetFieldCount(type: *TypeReflection) u32;
+    pub fn getName(self: *GenericReflection) cstring {
+        return spReflectionGeneric_GetName(self);
+    }
+
+    pub fn getTypeParameterCount(self: *GenericReflection) u32 {
+        return spReflectionGeneric_GetTypeParameterCount(self);
+    }
+
+    pub fn getTypeParameter(self: *GenericReflection, index: u32) *VariableReflection {
+        return spReflectionGeneric_GetTypeParameter(self, index);
+    }
+
+    pub fn getValueParameterCount(self: *GenericReflection) u32 {
+        return spReflectionGeneric_GetValueParameterCount(self);
+    }
+
+    pub fn getValueParameter(self: *GenericReflection, index: u32) *VariableReflection {
+        return spReflectionGeneric_GetValueParameter(self, index);
+    }
+
+    pub fn getTypeParameterConstraintCount(self: *GenericReflection, type_param: *VariableReflection) u32 {
+        return spReflectionGeneric_GetTypeParameterConstraintCount(self, type_param);
+    }
+
+    pub fn getTypeParameterConstraintType(self: *GenericReflection, type_param: *VariableReflection, index: u32) *TypeReflection {
+        return spReflectionGeneric_GetTypeParameterConstraintType(self, type_param, index);
+    }
+
+    pub fn getInnerDecl(self: *GenericReflection) *DeclReflection {
+        return spReflectionGeneric_GetInnerDecl(self);
+    }
+
+    pub fn getInnerKind(self: *GenericReflection) DeclKind {
+        return spReflectionGeneric_GetInnerKind(self);
+    }
+
+    pub fn getOuterGenericContainer(self: *GenericReflection) *GenericReflection {
+        return spReflectionGeneric_GetOuterGenericContainer(self);
+    }
+
+    pub fn getConcreteType(self: *GenericReflection, type_param: *VariableReflection) *TypeReflection {
+        return spReflectionGeneric_GetConcreteType(self, type_param);
+    }
+
+    pub fn getConcreteIntVal(self: *GenericReflection, value_param: *VariableReflection) i64 {
+        return spReflectionGeneric_GetConcreteIntVal(self, value_param);
+    }
+
+    pub fn applySpecializations(self: *GenericReflection, generic: *GenericReflection) *GenericReflection {
+        return spReflectionGeneric_applySpecializations(self, generic);
+    }
+
+    extern fn spReflectionGeneric_asDecl(self: *GenericReflection) *DeclReflection;
+    extern fn spReflectionGeneric_GetName(self: *GenericReflection) cstring;
+    extern fn spReflectionGeneric_GetTypeParameterCount(self: *GenericReflection) u32;
+    extern fn spReflectionGeneric_GetTypeParameter(self: *GenericReflection, index: u32) *VariableReflection;
+    extern fn spReflectionGeneric_GetValueParameterCount(self: *GenericReflection) u32;
+    extern fn spReflectionGeneric_GetValueParameter(self: *GenericReflection, index: u32) *VariableReflection;
+    extern fn spReflectionGeneric_GetTypeParameterConstraintCount(self: *GenericReflection, type_param: *VariableReflection) u32;
+    extern fn spReflectionGeneric_GetTypeParameterConstraintType(self: *GenericReflection, type_param: *VariableReflection, index: u32) *TypeReflection;
+    extern fn spReflectionGeneric_GetInnerKind(self: *GenericReflection) DeclKind;
+    extern fn spReflectionGeneric_GetInnerDecl(self: *GenericReflection) *DeclReflection;
+    extern fn spReflectionGeneric_GetOuterGenericContainer(self: *GenericReflection) *GenericReflection;
+    extern fn spReflectionGeneric_GetConcreteType(self: *GenericReflection, type_param: *VariableReflection) *TypeReflection;
+    extern fn spReflectionGeneric_GetConcreteIntVal(self: *GenericReflection, value_param: *VariableReflection) i64;
+    extern fn spReflectionGeneric_applySpecializations(self: *GenericReflection, generic: *GenericReflection) *GenericReflection;
 };
 
-const TypeLayoutReflection = extern struct {};
-// =============================================================================
+pub const EntryPointReflection = opaque {
+    pub fn getName(self: *EntryPointReflection) cstring {
+        return spReflectionEntryPoint_getName(self);
+    }
+
+    pub fn getNameOverride(self: *EntryPointReflection) cstring {
+        return spReflectionEntryPoint_getNameOverride(self);
+    }
+
+    pub fn getParameterCount(self: *EntryPointReflection) u32 {
+        return spReflectionEntryPoint_getParameterCount(self);
+    }
+
+    pub fn getFunction(self: *EntryPointReflection) *FunctionReflection {
+        return spReflectionEntryPoint_getFunction(self);
+    }
+
+    pub fn getParameterByIndex(self: *EntryPointReflection, index: u32) *VariableLayoutReflection {
+        return spReflectionEntryPoint_getParameterByIndex(self, index);
+    }
+
+    pub fn getStage(self: *EntryPointReflection) Stage {
+        return spReflectionEntryPoint_getStage(self);
+    }
+
+    pub fn getComputeThreadGroupSize(self: *EntryPointReflection, axis_count: u64, out_size_along_axis: *u64) void {
+        return spReflectionEntryPoint_getComputeThreadGroupSize(self, axis_count, out_size_along_axis);
+    }
+
+    pub fn getComputeWaveSize(self: *EntryPointReflection, out_wave_size: *u64) void {
+        return spReflectionEntryPoint_getComputeWaveSize(self, out_wave_size);
+    }
+
+    pub fn usesAnySampleRateInput(self: *EntryPointReflection) bool {
+        return spReflectionEntryPoint_usesAnySampleRateInput(self) != 0;
+    }
+
+    pub fn getVarLayout(self: *EntryPointReflection) *VariableLayoutReflection {
+        return spReflectionEntryPoint_getVarLayout(self);
+    }
+
+    pub fn getTypeLayout(self: *EntryPointReflection) *TypeLayoutReflection {
+        return self.getVarLayout().getTypeLayout();
+    }
+
+    pub fn getResultVarLayout(self: *EntryPointReflection) *VariableLayoutReflection {
+        return spReflectionEntryPoint_getResultVarLayout(self);
+    }
+
+    pub fn hasDefaultConstantBuffer(self: *EntryPointReflection) bool {
+        return spReflectionEntryPoint_hasDefaultConstantBuffer(self) != 0;
+    }
+
+    extern fn spReflectionEntryPoint_getName(self: *EntryPointReflection) cstring;
+    extern fn spReflectionEntryPoint_getNameOverride(self: *EntryPointReflection) cstring;
+    extern fn spReflectionEntryPoint_getFunction(self: *EntryPointReflection) *FunctionReflection;
+    extern fn spReflectionEntryPoint_getParameterCount(self: *EntryPointReflection) u32;
+    extern fn spReflectionEntryPoint_getParameterByIndex(self: *EntryPointReflection, index: u32) *VariableLayoutReflection;
+    extern fn spReflectionEntryPoint_getStage(self: *EntryPointReflection) Stage;
+    extern fn spReflectionEntryPoint_getComputeThreadGroupSize(self: *EntryPointReflection, axis_count: u64, out_size_along_axis: *u64) void;
+    extern fn spReflectionEntryPoint_getComputeWaveSize(self: *EntryPointReflection, out_wave_size: *u64) void;
+    extern fn spReflectionEntryPoint_usesAnySampleRateInput(self: *EntryPointReflection) i32;
+    extern fn spReflectionEntryPoint_getVarLayout(self: *EntryPointReflection) *VariableLayoutReflection;
+    extern fn spReflectionEntryPoint_getResultVarLayout(self: *EntryPointReflection) *VariableLayoutReflection;
+    extern fn spReflectionEntryPoint_hasDefaultConstantBuffer(self: *EntryPointReflection) i32;
+};
+pub const EntryPointLayout = EntryPointReflection;
+
+pub const TypeParameterReflection = opaque {
+    pub fn getName(self: TypeParameterReflection) cstring {
+        return spReflectionTypeParameter_GetName(self);
+    }
+
+    pub fn getIndex(self: TypeParameterReflection) u32 {
+        return spReflectionTypeParameter_GetIndex(self);
+    }
+
+    pub fn getConstraintCount(self: TypeParameterReflection) u32 {
+        return spReflectionTypeParameter_GetConstraintCount(self);
+    }
+
+    pub fn getConstraintByIndex(self: TypeParameterReflection, index: u32) *TypeReflection {
+        return spReflectionTypeParameter_GetConstraintByIndex(self, index);
+    }
+
+    extern fn spReflectionTypeParameter_GetName(self: TypeParameterReflection) cstring;
+    extern fn spReflectionTypeParameter_GetIndex(self: TypeParameterReflection) u32;
+    extern fn spReflectionTypeParameter_GetConstraintCount(self: TypeParameterReflection) u32;
+    extern fn spReflectionTypeParameter_GetConstraintByIndex(self: TypeParameterReflection, index: u32) *TypeReflection;
+};
+
+pub const ShaderReflection = opaque {
+    pub fn getParameterCount(self: *ShaderReflection) u32 {
+        return spReflection_GetParameterCount(self);
+    }
+
+    pub fn getTypeParameterCount(self: *ShaderReflection) u32 {
+        return spReflection_GetTypeParameterCount(self);
+    }
+
+    pub fn getSession(self: *ShaderReflection) *ISession {
+        return spReflection_GetSession(self);
+    }
+
+    pub fn getTypeParameterByIndex(self: *ShaderReflection, index: u32) *TypeParameterReflection {
+        return spReflection_GetTypeParameterByIndex(self, index);
+    }
+
+    pub fn findTypeParameter(self: *ShaderReflection, name: cstring) *TypeParameterReflection {
+        return spReflection_FindTypeParameter(self, name);
+    }
+
+    pub fn getParameterByIndex(self: *ShaderReflection, index: u32) *VariableLayoutReflection {
+        return spReflection_GetParameterByIndex(self, index);
+    }
+
+    pub fn get(request: *ICompileRequest) *ProgramLayout {
+        return spGetReflection(request);
+    }
+
+    pub fn getEntryPointCount(self: *ShaderReflection) u64 {
+        return spReflection_getEntryPointCount(self);
+    }
+
+    pub fn getEntryPointByIndex(self: *ShaderReflection, index: u64) *EntryPointReflection {
+        return spReflection_getEntryPointByIndex(self, index);
+    }
+
+    pub fn getGlobalConstantBufferBinding(self: *ShaderReflection) u64 {
+        return spReflection_getGlobalConstantBufferBinding(self);
+    }
+
+    pub fn getGlobalConstantBufferSize(self: *ShaderReflection) usize {
+        return spReflection_getGlobalConstantBufferSize(self);
+    }
+
+    pub fn findTypeByName(self: *ShaderReflection, name: cstring) *TypeReflection {
+        return spReflection_FindTypeByName(self, name);
+    }
+
+    pub fn findFunctionByName(self: *ShaderReflection, name: cstring) *FunctionReflection {
+        return spReflection_FindFunctionByName(self, name);
+    }
+
+    pub fn findFunctionByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *FunctionReflection {
+        return spReflection_FindFunctionByNameInType(self, refl_type, name);
+    }
+
+    /// Deprecated
+    pub fn tryResolveOverloadedFunction(self: *ShaderReflection, candidates: []*FunctionReflection) *FunctionReflection {
+        return spReflection_TryResolveOverloadedFunction(self, @intCast(candidates.len), candidates.ptr);
+    }
+
+    pub fn findVarByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *VariableReflection {
+        return spReflection_FindVarByNameInType(self, refl_type, name);
+    }
+
+    pub fn getTypeLayout(self: *ShaderReflection, reflection_type: *TypeReflection, rules: LayoutRules) *TypeLayoutReflection {
+        return spReflection_GetTypeLayout(self, reflection_type, rules);
+    }
+
+    pub fn findEntryPointByName(self: *ShaderReflection, name: cstring) *EntryPointReflection {
+        return spReflection_findEntryPointByName(self, name);
+    }
+
+    pub fn specializeType(
+        self: *ShaderReflection,
+        type_refl: *TypeReflection,
+        specialization_args: []const *TypeReflection,
+        out_diagnostics: ?**IBlob,
+    ) *TypeReflection {
+        const diagnostics = getDiagnosticsPtr(out_diagnostics);
+        defer logDiagnostics(diagnostics, out_diagnostics);
+        return spReflection_specializeType(self, type_refl, @intCast(specialization_args.len), specialization_args.ptr, diagnostics);
+    }
+
+    pub fn specializeGeneric(
+        self: *ShaderReflection,
+        generic: *GenericReflection,
+        arg_types: []const *GenericArgType,
+        args: []const *GenericArgReflection,
+        out_diagnostics: ?**IBlob,
+    ) *GenericReflection {
+        std.debug.assert(arg_types.len == args.len);
+        const diagnostics = getDiagnosticsPtr(out_diagnostics);
+        defer logDiagnostics(diagnostics, out_diagnostics);
+        return spReflection_specializeGeneric(self, generic, @intCast(args.len), arg_types.ptr, args.ptr, diagnostics);
+    }
+
+    pub fn isSubType(self: *ShaderReflection, sub_type: *TypeReflection, super_type: *TypeReflection) bool {
+        return spReflection_isSubType(self, sub_type, super_type);
+    }
+
+    pub fn getHashedStringCount(self: *ShaderReflection) u64 {
+        return spReflection_getHashedStringCount(self);
+    }
+
+    pub fn getHashedString(self: *ShaderReflection, index: u64) [:0]const u8 {
+        var size: usize = undefined;
+        const bytes = spReflection_getHashedString(self, index, &size);
+        return bytes[0..size];
+    }
+
+    pub fn getGlobalParamsTypeLayout(self: *ShaderReflection) *TypeLayoutReflection {
+        return spReflection_getGlobalParamsTypeLayout(self);
+    }
+
+    pub fn getGlobalParamsVarLayout(self: *ShaderReflection) *VariableLayoutReflection {
+        return spReflection_getGlobalParamsVarLayout(self);
+    }
+
+    pub fn toJson(self: *ShaderReflection) !*IBlob {
+        var blob: *IBlob = undefined;
+        try spReflection_ToJson(self, null, &blob);
+        return blob;
+    }
+
+    extern fn spReflection_ToJson(self: *ShaderReflection, request: ?*ICompileRequest, out_blob: **IBlob) Result;
+    extern fn spReflection_GetParameterCount(self: *ShaderReflection) u32;
+    extern fn spReflection_GetParameterByIndex(self: *ShaderReflection, index: u32) *VariableLayoutReflection;
+    extern fn spReflection_GetTypeParameterCount(self: *ShaderReflection) u32;
+    extern fn spReflection_GetTypeParameterByIndex(self: *ShaderReflection, index: u32) *TypeParameterReflection;
+    extern fn spReflection_FindTypeParameter(self: *ShaderReflection, name: cstring) *TypeParameterReflection;
+    extern fn spReflection_FindTypeByName(self: *ShaderReflection, name: cstring) *TypeReflection;
+    extern fn spReflection_GetTypeLayout(self: *ShaderReflection, reflection_type: *TypeReflection, rules: LayoutRules) *TypeLayoutReflection;
+    extern fn spReflection_FindFunctionByName(self: *ShaderReflection, name: cstring) *FunctionReflection;
+    extern fn spReflection_FindFunctionByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *FunctionReflection;
+    extern fn spReflection_FindVarByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *VariableReflection;
+    extern fn spReflection_TryResolveOverloadedFunction(self: *ShaderReflection, candidate_count: u32, candidates: **FunctionReflection) *FunctionReflection;
+
+    extern fn spReflection_getEntryPointCount(self: *ShaderReflection) u64;
+    extern fn spReflection_getEntryPointByIndex(self: *ShaderReflection, index: u64) *EntryPointReflection;
+    extern fn spReflection_findEntryPointByName(self: *ShaderReflection, name: cstring) *EntryPointReflection;
+    extern fn spReflection_getGlobalConstantBufferBinding(self: *ShaderReflection) u64;
+    extern fn spReflection_getGlobalConstantBufferSize(self: *ShaderReflection) usize;
+
+    extern fn spReflection_specializeType(
+        self: *ShaderReflection,
+        type: *TypeReflection,
+        specialization_arg_count: i64,
+        specialization_args: [*]const *TypeReflection,
+        out_diagnostics: ?**IBlob,
+    ) *TypeReflection;
+
+    extern fn spReflection_specializeGeneric(
+        self: *ShaderReflection,
+        generic: *GenericReflection,
+        arg_count: i64,
+        arg_types: [*]const *GenericArgType,
+        args: [*]const *GenericArgReflection,
+        out_diagnostics: ?**IBlob,
+    ) *GenericReflection;
+
+    extern fn spReflection_isSubType(self: *ShaderReflection, sub_type: *TypeReflection, super_type: *TypeReflection) bool;
+    extern fn spReflection_getHashedStringCount(self: *ShaderReflection) u64;
+
+    /// Get a hashed string. The number of chars is written in outCount.
+    /// The count does **NOT including terminating 0. The returned string will be 0 terminated.
+    extern fn spReflection_getHashedString(self: *ShaderReflection, index: u64, out_count: *usize) cstring;
+    extern fn spReflection_getGlobalParamsTypeLayout(self: *ShaderReflection) *TypeLayoutReflection;
+    extern fn spReflection_getGlobalParamsVarLayout(self: *ShaderReflection) *VariableLayoutReflection;
+
+    extern fn spReflection_GetSession(self: *ShaderReflection) *ISession;
+    extern fn spGetReflection(request: *ICompileRequest) *ShaderReflection;
+};
+pub const ProgramLayout = ShaderReflection;
+
+pub const DeclReflection = opaque {
+    pub fn getName(self: *DeclReflection) cstring {
+        return spReflectionDecl_getName(self);
+    }
+
+    pub fn getKind(self: *DeclReflection) DeclKind {
+        return spReflectionDecl_getKind(self);
+    }
+
+    pub fn getChildrenCount(self: *DeclReflection) u32 {
+        return spReflectionDecl_getChildrenCount(self);
+    }
+
+    pub fn getChild(self: *DeclReflection, index: u32) *DeclReflection {
+        return spReflectionDecl_getChild(self, index);
+    }
+
+    pub fn getType(self: *DeclReflection) *TypeReflection {
+        return spReflection_getTypeFromDecl(self);
+    }
+
+    pub fn asVariable(self: *DeclReflection) *VariableReflection {
+        return spReflectionDecl_castToVariable(self);
+    }
+
+    pub fn asFunction(self: *DeclReflection) *FunctionReflection {
+        return spReflectionDecl_castToFunction(self);
+    }
+
+    pub fn asGeneric(self: *DeclReflection) *GenericReflection {
+        return spReflectionDecl_castToGeneric(self);
+    }
+
+    pub fn getParent(self: *DeclReflection) *DeclReflection {
+        return spReflectionDecl_getParent(self);
+    }
+
+    pub fn findModifier(self: *DeclReflection, id: ModifierID) *Modifier {
+        return spReflectionDecl_findModifier(self, id);
+    }
+
+    pub fn getChildernOfKind(self: *DeclReflection, kind: DeclKind) FilteredIterator {
+        const count = self.getChildrenCount();
+        var index: u32 = 0;
+        while (index < count and self.getChild(index).getKind() != kind) {
+            index += 1;
+        }
+        return FilteredIterator{
+            .parent = self,
+            .count = count,
+            .index = index,
+            .kind = kind,
+        };
+    }
+
+    pub const FilteredIterator = struct {
+        parent: *DeclReflection,
+        count: u32,
+        index: u32,
+        kind: DeclKind,
+
+        pub fn next(self: *FilteredIterator) ?*DeclReflection {
+            if (self.index == self.count) return null;
+            const result = self.parent.getChild(self.index);
+            self.index += 1;
+
+            while (self.index < self.count and self.parent.getChild(self.index).getKind() != self.kind) {
+                self.index += 1;
+            }
+            return result;
+        }
+    };
+
+    pub fn getChildern(self: *DeclReflection) ChildIterator {
+        return ChildIterator{
+            .parent = self,
+            .count = self.getChildrenCount(),
+            .index = 0,
+        };
+    }
+
+    pub const ChildIterator = struct {
+        parent: *DeclReflection,
+        count: u32,
+        index: u32,
+
+        pub fn next(self: *ChildIterator) ?*DeclReflection {
+            if (self.index == self.count) return null;
+            defer self.index += 1;
+            return self.parent.getChild(self.index);
+        }
+    };
+
+    extern fn spReflectionDecl_getChildrenCount(self: *DeclReflection) u32;
+    extern fn spReflectionDecl_getChild(self: *DeclReflection, index: u32) *DeclReflection;
+    extern fn spReflectionDecl_getName(self: *DeclReflection) cstring;
+    extern fn spReflectionDecl_getKind(self: *DeclReflection) DeclKind;
+    extern fn spReflectionDecl_castToFunction(self: *DeclReflection) *FunctionReflection;
+    extern fn spReflectionDecl_castToVariable(self: *DeclReflection) *VariableReflection;
+    extern fn spReflectionDecl_castToGeneric(self: *DeclReflection) *GenericReflection;
+    extern fn spReflection_getTypeFromDecl(self: *DeclReflection) *TypeReflection;
+    extern fn spReflectionDecl_getParent(self: *DeclReflection) *DeclReflection;
+    extern fn spReflectionDecl_findModifier(self: *DeclReflection, id: ModifierID) *Modifier;
+};
 
 pub const CompileCoreModuleFlags = packed struct(u32) {
     write_documentation: bool = false,
@@ -2843,8 +3896,8 @@ test "compile" {
     defer linked_program.release();
 
     const reflection = linked_program.getLayout(0, null) orelse return error.ReflectionFailed;
-    try std.testing.expectEqual(1, reflection.entryPointCount());
-    try std.testing.expectEqual(3, reflection.parameterCount());
+    try std.testing.expectEqual(1, reflection.getEntryPointCount());
+    try std.testing.expectEqual(3, reflection.getParameterCount());
 
     const spirv_code = try linked_program.getEntryPointCode(0, 0, null);
     defer spirv_code.release();
@@ -2867,7 +3920,6 @@ const SlangTestInterfaces = extern struct {
     IMutableFileSystem: IMutableFileSystem,
     IWriter: IWriter,
     IProfiler: IProfiler,
-    ICompileRequest: ICompileRequest,
     IGlobalSession: IGlobalSession,
     ISession: ISession,
     IMetadata: IMetadata,

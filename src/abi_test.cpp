@@ -1179,7 +1179,6 @@ struct SlangTestInterfaces {
   test::IMutableFileSystem IMutableFileSystem;
   test::IWriter IWriter;
   test::IProfiler IProfiler;
-  void *ICompileRequest;
   test::IGlobalSession IGlobalSession;
   test::ISession ISession;
   test::IMetadata IMetadata;
