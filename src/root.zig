@@ -1,11 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const log = std.log.scoped(.slang);
-const cstring = [*:0]const u8;
 
-// TODO: Fixup all type reflection returned types (optionals, errors etc)
 // TODO: Copy over all the doc comments from slang
-// TODO: Turn all parameter names to snake_case
 // TODO: Create tests for struct sizes and enum tags by reflecting this zig module, generating the
 // c++ code that accesses the appropriate tags/sizeofs, maybe with some name conversion overrides
 // for edge cases, and pass them back to zig via FFI. Write the actual assertion tests on the zig
@@ -44,6 +41,7 @@ pub const Severity = enum(i32) {
 pub const DiagnosticFlags = packed struct(i32) {
     verbose_paths: bool = false,
     treat_warnings_as_errors: bool = false,
+    _pad0: u30 = 0,
 };
 
 pub const BindableResourceType = enum(i32) {
@@ -125,6 +123,7 @@ pub const CompileFlags = packed struct(u32) {
     no_mangling: bool = false,
     no_codegen: bool = false,
     obfuscate: bool = false,
+    _pad1: u26 = 0,
 };
 
 pub const TargetFlags = packed struct(u32) {
@@ -664,19 +663,22 @@ pub const Result = enum(i32) {
             .out_of_memory => return error.OutOfMemory,
             .buffer_too_small => return error.BufferTooSmall,
             .uninitialized => return error.Uninitialized,
-            .pending => return error.Pending,
+            .pending => {
+                log.err("Pending results should result in null optionals, not error unions. Please submit a bug report that includes the name of the function that triggered this error.", .{});
+                return error.Pending;
+            },
             .cannot_open => return error.CannotOpen,
             .not_found => return error.NotFound,
             .internal_fail => return error.InternalFail,
             .not_available => return error.NotAvailable,
             .time_out => return error.TimeOut,
-            else => if (self.failed()) return error.GenericFailure,
+            else => if (self.failed()) return error.Fail,
         }
     }
 };
 
 pub const Error = error{
-    GenericFailure,
+    Fail,
     NotImplemented,
     NoInterface,
     Aborted,
@@ -990,7 +992,7 @@ pub const IFileSystemExt = extern struct {
 
     const VTable = extern struct {
         base: IFileSystem.VTable,
-        getFileUniqueIdentity: *const fn (this: *IFileSystemExt, path: [*:0]const u8, out_unhique_identity: **IBlob) callconv(mcall) Result,
+        getFileUniqueIdentity: *const fn (this: *IFileSystemExt, path: [*:0]const u8, out_unique_identity: **IBlob) callconv(mcall) Result,
         calcCombinedPath: *const fn (this: *IFileSystemExt, from_path_type: PathType, from_path: [*:0]const u8, path: [*:0]const u8, out_path: **IBlob) callconv(mcall) Result,
         getPathType: *const fn (this: *IFileSystemExt, path: [*:0]const u8, out_path_type: *PathType) callconv(mcall) Result,
         getPath: *const fn (this: *IFileSystemExt, kind: PathKind, path: [*:0]const u8, out_path: **IBlob) callconv(mcall) Result,
@@ -1237,9 +1239,7 @@ pub const DiagnosticsCallback = *const fn (message: [*:0]const u8, user_data: ?*
 /// An advantage of using this function over the method is that doing so does
 /// Not require the creation of a session, which can be a fairly costly
 /// Operation.
-pub const getBuildTagString = spGetBuildTagString;
-
-extern fn spGetBuildTagString() [*:0]const u8;
+pub const getBuildTagString = cdef.spGetBuildTagString;
 
 pub const GenericArgReflection = extern union {
     type_val: *TypeReflection,
@@ -1396,76 +1396,40 @@ pub const ImageFormat = enum(u32) {
 pub const UNBOUNDED_SIZE = std.math.maxInt(usize);
 
 pub const Attribute = opaque {
-    pub fn getName(self: *Attribute) cstring {
-        return spReflectionUserAttribute_GetName(self);
-    }
-
-    pub fn getArgumentCount(self: *Attribute) u32 {
-        return spReflectionUserAttribute_GetArgumentCount(self);
-    }
-
-    pub fn getArgumentType(self: *Attribute, index: u32) *TypeReflection {
-        return spReflectionUserAttribute_GetArgumentType(self, index);
-    }
+    pub const getName = cdef.spReflectionUserAttribute_GetName;
+    pub const getArgumentCount = cdef.spReflectionUserAttribute_GetArgumentCount;
+    pub const getArgumentType = cdef.spReflectionUserAttribute_GetArgumentType;
 
     pub fn getArgumentValueInt(self: *Attribute, index: u32) !i32 {
         var result: i32 = undefined;
-        try spReflectionUserAttribute_GetArgumentValueInt(self, index, &result).check();
+        try cdef.spReflectionUserAttribute_GetArgumentValueInt(self, index, &result).check();
         return result;
     }
 
     pub fn getArgumentValueFloat(self: *Attribute, index: u32) !f32 {
         var result: f32 = undefined;
-        try spReflectionUserAttribute_GetArgumentValueFloat(self, index, &result).check();
+        try cdef.spReflectionUserAttribute_GetArgumentValueFloat(self, index, &result).check();
         return result;
     }
 
     pub fn getArgumentValueString(self: *Attribute, index: u32) ?[*]const u8 {
         var size: usize = undefined;
-        const bytes = spReflectionUserAttribute_GetArgumentValueString(self, index, &size) orelse return null;
+        const bytes = cdef.spReflectionUserAttribute_GetArgumentValueString(self, index, &size) orelse return null;
         return bytes[0..size];
     }
-
-    extern fn spReflectionUserAttribute_GetName(attrib: *Attribute) cstring;
-    extern fn spReflectionUserAttribute_GetArgumentCount(attrib: *Attribute) u32;
-    extern fn spReflectionUserAttribute_GetArgumentType(attrib: *Attribute, index: u32) *TypeReflection;
-    extern fn spReflectionUserAttribute_GetArgumentValueInt(attrib: *Attribute, index: u32, rs: *i32) Result;
-    extern fn spReflectionUserAttribute_GetArgumentValueFloat(attrib: *Attribute, index: u32, rs: *f32) Result;
-    extern fn spReflectionUserAttribute_GetArgumentValueString(attrib: *Attribute, index: u32, out_size: *usize) ?[*]const u8;
 };
 pub const UserAttribute = Attribute;
 
 pub const TypeReflection = opaque {
-    pub fn getKind(self: *TypeReflection) TypeKind {
-        return spReflectionType_GetKind(self);
-    }
-
-    pub fn getUserAttributeCount(self: *TypeReflection) u32 {
-        return spReflectionType_GetUserAttributeCount(self);
-    }
-
-    pub fn getUserAttributeByIndex(self: *TypeReflection, index: u32) *UserAttribute {
-        return spReflectionType_GetUserAttribute(self, index);
-    }
-
-    pub fn findUserAttributeByName(self: *TypeReflection, name: cstring) *UserAttribute {
-        return spReflectionType_FindUserAttributeByName(self, name);
-    }
-
+    pub const getKind = cdef.spReflectionType_GetKind;
+    pub const getUserAttributeCount = cdef.spReflectionType_GetUserAttributeCount;
+    pub const getUserAttributeByIndex = cdef.spReflectionType_GetUserAttribute;
+    pub const findUserAttributeByName = cdef.spReflectionType_FindUserAttributeByName;
     pub const findAttributeByName = findUserAttributeByName;
-
-    pub fn applySpecializations(self: *TypeReflection, generic: *GenericReflection) *TypeReflection {
-        return spReflectionType_applySpecializations(self, generic);
-    }
-
+    pub const applySpecializations = cdef.spReflectionType_applySpecializations;
     /// only useful if `getKind() == .@"struct"`
-    pub fn getFieldCount(self: *TypeReflection) u32 {
-        return spReflectionType_GetFieldCount(self);
-    }
-
-    pub fn getFieldByIndex(self: *TypeReflection, index: u32) *VariableReflection {
-        return spReflectionType_GetFieldByIndex(self, index);
-    }
+    pub const getFieldCount = cdef.spReflectionType_GetFieldCount;
+    pub const getFieldByIndex = cdef.spReflectionType_GetFieldByIndex;
 
     pub fn isArray(self: *TypeReflection) bool {
         return self.getKind() == .array;
@@ -1480,9 +1444,7 @@ pub const TypeReflection = opaque {
     }
 
     /// only usefull if `getKind() == .array`
-    pub fn getElementCount(self: *TypeReflection, reflection: ?*ShaderReflection) usize {
-        return spReflectionType_GetSpecializedElementCount(self, reflection);
-    }
+    pub const getElementCount = cdef.spReflectionType_GetSpecializedElementCount;
 
     pub fn getTotalArrayElementCount(self: *TypeReflection) usize {
         var result: usize = 0;
@@ -1494,67 +1456,22 @@ pub const TypeReflection = opaque {
         return result;
     }
 
-    pub fn getElementType(self: *TypeReflection) *TypeReflection {
-        return spReflectionType_GetElementType(self);
-    }
-
-    pub fn getRowCount(self: *TypeReflection) u32 {
-        return spReflectionType_GetRowCount(self);
-    }
-
-    pub fn getColumnCount(self: *TypeReflection) u32 {
-        return spReflectionType_GetColumnCount(self);
-    }
-
-    pub fn getScalarType(self: *TypeReflection) ScalarType {
-        return spReflectionType_GetScalarType(self);
-    }
-
-    pub fn getResourceShape(self: *TypeReflection) ResourceShape {
-        return spReflectionType_GetResourceShape(self);
-    }
-
-    pub fn getResourceAccess(self: *TypeReflection) ResourceAccess {
-        return spReflectionType_GetResourceAccess(self);
-    }
-
-    pub fn getResourceResultType(self: *TypeReflection) *TypeReflection {
-        return spReflectionType_GetResourceResultType(self);
-    }
-
-    pub fn getName(self: *TypeReflection) cstring {
-        return spReflectionType_GetName(self);
-    }
+    pub const getElementType = cdef.spReflectionType_GetElementType;
+    pub const getRowCount = cdef.spReflectionType_GetRowCount;
+    pub const getColumnCount = cdef.spReflectionType_GetColumnCount;
+    pub const getScalarType = cdef.spReflectionType_GetScalarType;
+    pub const getResourceShape = cdef.spReflectionType_GetResourceShape;
+    pub const getResourceAccess = cdef.spReflectionType_GetResourceAccess;
+    pub const getResourceResultType = cdef.spReflectionType_GetResourceResultType;
+    pub const getName = cdef.spReflectionType_GetName;
 
     pub fn getFullName(self: *TypeReflection) !*IBlob {
         var name: *IBlob = undefined;
-        try spReflectionType_GetFullName(self, &name).check();
+        try cdef.spReflectionType_GetFullName(self, &name).check();
         return name;
     }
 
-    pub fn getGenericContainer(self: *TypeReflection) *GenericReflection {
-        return spReflectionType_GetGenericContainer(self);
-    }
-
-    extern fn spReflectionType_GetKind(self: *TypeReflection) TypeKind;
-    extern fn spReflectionType_GetUserAttributeCount(self: *TypeReflection) u32;
-    extern fn spReflectionType_GetUserAttribute(self: *TypeReflection, index: u32) *UserAttribute;
-    extern fn spReflectionType_FindUserAttributeByName(self: *TypeReflection, name: cstring) *UserAttribute;
-    extern fn spReflectionType_applySpecializations(self: *TypeReflection, generic: *GenericReflection) *TypeReflection;
-    extern fn spReflectionType_GetFieldCount(self: *TypeReflection) u32;
-    extern fn spReflectionType_GetFieldByIndex(self: *TypeReflection, index: u32) *VariableReflection;
-    extern fn spReflectionType_GetElementCount(self: *TypeReflection) usize;
-    extern fn spReflectionType_GetSpecializedElementCount(self: *TypeReflection, reflection: *ShaderReflection) usize;
-    extern fn spReflectionType_GetElementType(self: *TypeReflection) *TypeReflection;
-    extern fn spReflectionType_GetRowCount(self: *TypeReflection) u32;
-    extern fn spReflectionType_GetColumnCount(self: *TypeReflection) u32;
-    extern fn spReflectionType_GetScalarType(self: *TypeReflection) ScalarType;
-    extern fn spReflectionType_GetResourceShape(self: *TypeReflection) ResourceShape;
-    extern fn spReflectionType_GetResourceAccess(self: *TypeReflection) ResourceAccess;
-    extern fn spReflectionType_GetResourceResultType(self: *TypeReflection) *TypeReflection;
-    extern fn spReflectionType_GetName(self: *TypeReflection) cstring;
-    extern fn spReflectionType_GetFullName(self: *TypeReflection, out_name_blob: **IBlob) Result;
-    extern fn spReflectionType_GetGenericContainer(self: *TypeReflection) *GenericReflection;
+    pub const getGenericContainer = cdef.spReflectionType_GetGenericContainer;
 };
 
 pub const ParameterCategory = enum(u32) {
@@ -1662,42 +1579,20 @@ pub const BindingType = enum(u32) {
 };
 
 pub const TypeLayoutReflection = opaque {
-    pub fn getType(self: *TypeLayoutReflection) *TypeReflection {
-        return spReflectionTypeLayout_GetType(self);
-    }
-
-    pub fn getKind(self: *TypeLayoutReflection) TypeReflection.Kind {
-        return spReflectionTypeLayout_getKind(self);
-    }
-
-    pub fn getSize(self: *TypeLayoutReflection, category: ParameterCategory) usize {
-        return spReflectionTypeLayout_GetSize(self, category);
-    }
-
-    pub fn getStride(self: *TypeLayoutReflection, category: ParameterCategory) usize {
-        return spReflectionTypeLayout_GetStride(self, category);
-    }
-
-    pub fn getAlignment(self: *TypeLayoutReflection, category: ParameterCategory) i32 {
-        return spReflectionTypeLayout_getAlignment(self, category);
-    }
-
-    pub fn getFieldCount(self: *TypeLayoutReflection) u32 {
-        return spReflectionTypeLayout_GetFieldCount(self);
-    }
-
-    pub fn getFieldByIndex(self: *TypeLayoutReflection, index: u32) *VariableLayoutReflection {
-        return spReflectionTypeLayout_GetFieldByIndex(self, index);
-    }
+    pub const getType = cdef.spReflectionTypeLayout_GetType;
+    pub const getKind = cdef.spReflectionTypeLayout_getKind;
+    pub const getSize = cdef.spReflectionTypeLayout_GetSize;
+    pub const getStride = cdef.spReflectionTypeLayout_GetStride;
+    pub const getAlignment = cdef.spReflectionTypeLayout_getAlignment;
+    pub const getFieldCount = cdef.spReflectionTypeLayout_GetFieldCount;
+    pub const getFieldByIndex = cdef.spReflectionTypeLayout_GetFieldByIndex;
 
     pub fn findFieldIndexByName(self: *TypeLayoutReflection, name: []const u8) i64 {
         const end: [*]const u8 = @ptrFromInt(@intFromPtr(name.ptr) + name.len);
-        return spReflectionTypeLayout_findFieldIndexByName(self, name.ptr, end);
+        return cdef.spReflectionTypeLayout_findFieldIndexByName(self, name.ptr, end);
     }
 
-    pub fn getExplicitCounter(self: *TypeLayoutReflection) *VariableLayoutReflection {
-        return spReflectionTypeLayout_GetExplicitCounter(self);
-    }
+    pub const getExplicitCounter = cdef.spReflectionTypeLayout_GetExplicitCounter;
 
     pub fn isArray(self: *TypeLayoutReflection) bool {
         return self.getType().isArray();
@@ -1720,33 +1615,13 @@ pub const TypeLayoutReflection = opaque {
         return self.getType().getTotalArrayElementCount();
     }
 
-    pub fn getElementStride(self: *TypeLayoutReflection, category: ParameterCategory) usize {
-        return spReflectionTypeLayout_GetElementStride(self, category);
-    }
-
-    pub fn getElementTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection {
-        return spReflectionTypeLayout_GetElementTypeLayout(self);
-    }
-
-    pub fn getElementVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection {
-        return spReflectionTypeLayout_GetElementVarLayout(self);
-    }
-
-    pub fn getContainerVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection {
-        return spReflectionTypeLayout_getContainerVarLayout(self);
-    }
-
-    pub fn getParameterCategory(self: *TypeLayoutReflection) ParameterCategory {
-        return spReflectionTypeLayout_GetParameterCategory(self);
-    }
-
-    pub fn getCategoryCount(self: *TypeLayoutReflection) u32 {
-        return spReflectionTypeLayout_GetCategoryCount(self);
-    }
-
-    pub fn getCategoryByIndex(self: *TypeLayoutReflection, index: u32) ParameterCategory {
-        return spReflectionTypeLayout_GetCategoryByIndex(self, index);
-    }
+    pub const getElementStride = cdef.spReflectionTypeLayout_GetElementStride;
+    pub const getElementTypeLayout = cdef.spReflectionTypeLayout_GetElementTypeLayout;
+    pub const getElementVarLayout = cdef.spReflectionTypeLayout_GetElementVarLayout;
+    pub const getContainerVarLayout = cdef.spReflectionTypeLayout_getContainerVarLayout;
+    pub const getParameterCategory = cdef.spReflectionTypeLayout_GetParameterCategory;
+    pub const getCategoryCount = cdef.spReflectionTypeLayout_GetCategoryCount;
+    pub const getCategoryByIndex = cdef.spReflectionTypeLayout_GetCategoryByIndex;
 
     pub fn getRowCount(self: *TypeLayoutReflection) u32 {
         return self.getType().getRowCount();
@@ -1756,7 +1631,7 @@ pub const TypeLayoutReflection = opaque {
         return self.getType().getColumnCount();
     }
 
-    pub fn getScalarType(self: *TypeLayoutReflection) TypeReflection.ScalarType {
+    pub fn getScalarType(self: *TypeLayoutReflection) ScalarType {
         return self.getType().getScalarType();
     }
 
@@ -1776,157 +1651,37 @@ pub const TypeLayoutReflection = opaque {
         return self.getType().getName();
     }
 
-    pub fn getMatrixLayoutMode(self: *TypeLayoutReflection) MatrixLayoutMode {
-        return spReflectionTypeLayout_GetMatrixLayoutMode(self);
-    }
-
-    pub fn getGenericParamIndex(self: *TypeLayoutReflection) i32 {
-        return spReflectionTypeLayout_getGenericParamIndex(self);
-    }
-
-    pub fn getPendingDataTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection {
-        return spReflectionTypeLayout_getPendingDataTypeLayout(self);
-    }
-
-    pub fn getSpecializedTypePendingDataVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection {
-        return spReflectionTypeLayout_getSpecializedTypePendingDataVarLayout(self);
-    }
-
-    pub fn getBindingRangeCount(self: *TypeLayoutReflection) i64 {
-        return spReflectionTypeLayout_getBindingRangeCount(self);
-    }
-
-    pub fn getBindingRangeType(self: *TypeLayoutReflection, index: i64) BindingType {
-        return spReflectionTypeLayout_getBindingRangeType(self, index);
-    }
+    pub const getMatrixLayoutMode = cdef.spReflectionTypeLayout_GetMatrixLayoutMode;
+    pub const getGenericParamIndex = cdef.spReflectionTypeLayout_getGenericParamIndex;
+    pub const getPendingDataTypeLayout = cdef.spReflectionTypeLayout_getPendingDataTypeLayout;
+    pub const getSpecializedTypePendingDataVarLayout = cdef.spReflectionTypeLayout_getSpecializedTypePendingDataVarLayout;
+    pub const getBindingRangeCount = cdef.spReflectionTypeLayout_getBindingRangeCount;
+    pub const getBindingRangeType = cdef.spReflectionTypeLayout_getBindingRangeType;
 
     pub fn isBindingRangeSpecializable(self: *TypeLayoutReflection, index: i64) bool {
-        return spReflectionTypeLayout_isBindingRangeSpecializable(self, index) != 0;
+        return cdef.spReflectionTypeLayout_isBindingRangeSpecializable(self, index) != 0;
     }
 
-    pub fn getBindingRangeBindingCount(self: *TypeLayoutReflection, index: i64) i64 {
-        return spReflectionTypeLayout_getBindingRangeBindingCount(self, index);
-    }
-
-    pub fn getFieldBindingRangeOffset(self: *TypeLayoutReflection, field_index: i64) i64 {
-        return spReflectionTypeLayout_getFieldBindingRangeOffset(self, field_index);
-    }
-
-    pub fn getExplicitCounterBindingRangeOffset(self: *TypeLayoutReflection) i64 {
-        return spReflectionTypeLayout_getExplicitCounterBindingRangeOffset(self);
-    }
-
-    pub fn getBindingRangeLeafTypeLayout(self: *TypeLayoutReflection, index: i64) *TypeLayoutReflection {
-        return spReflectionTypeLayout_getBindingRangeLeafTypeLayout(self, index);
-    }
-
-    pub fn getBindingRangeLeafVariable(self: *TypeLayoutReflection, index: i64) *VariableReflection {
-        return spReflectionTypeLayout_getBindingRangeLeafVariable(self, index);
-    }
-
-    pub fn getBindingRangeImageFormat(self: *TypeLayoutReflection, index: i64) ImageFormat {
-        return spReflectionTypeLayout_getBindingRangeImageFormat(self, index);
-    }
-
-    pub fn getBindingRangeDescriptorSetIndex(self: *TypeLayoutReflection, index: i64) i64 {
-        return spReflectionTypeLayout_getBindingRangeDescriptorSetIndex(self, index);
-    }
-
-    pub fn getBindingRangeFirstDescriptorRangeIndex(self: *TypeLayoutReflection, index: i64) i64 {
-        return spReflectionTypeLayout_getBindingRangeFirstDescriptorRangeIndex(self, index);
-    }
-
-    pub fn getBindingRangeDescriptorRangeCount(self: *TypeLayoutReflection, index: i64) i64 {
-        return spReflectionTypeLayout_getBindingRangeDescriptorRangeCount(self, index);
-    }
-
-    pub fn getDescriptorSetCount(self: *TypeLayoutReflection) i64 {
-        return spReflectionTypeLayout_getDescriptorSetCount(self);
-    }
-
-    pub fn getDescriptorSetSpaceOffset(self: *TypeLayoutReflection, set_index: i64) i64 {
-        return spReflectionTypeLayout_getDescriptorSetSpaceOffset(self, set_index);
-    }
-
-    pub fn getDescriptorSetDescriptorRangeCount(self: *TypeLayoutReflection, set_index: i64) i64 {
-        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeCount(self, set_index);
-    }
-
-    pub fn getDescriptorSetDescriptorRangeIndexOffset(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64 {
-        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeIndexOffset(self, set_index, range_index);
-    }
-
-    pub fn getDescriptorSetDescriptorRangeDescriptorCount(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64 {
-        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeDescriptorCount(self, set_index, range_index);
-    }
-
-    pub fn getDescriptorSetDescriptorRangeType(self: *TypeLayoutReflection, set_index: i64, range_index: i64) BindingType {
-        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeType(self, set_index, range_index);
-    }
-
-    pub fn getDescriptorSetDescriptorRangeCategory(self: *TypeLayoutReflection, set_index: i64, range_index: i64) ParameterCategory {
-        return spReflectionTypeLayout_getDescriptorSetDescriptorRangeCategory(self, set_index, range_index);
-    }
-
-    pub fn getSubObjectRangeCount(self: *TypeLayoutReflection) i64 {
-        return spReflectionTypeLayout_getSubObjectRangeCount(self);
-    }
-
-    pub fn getSubObjectRangeBindingRangeIndex(self: *TypeLayoutReflection, sub_object_range_index: i64) i64 {
-        return spReflectionTypeLayout_getSubObjectRangeBindingRangeIndex(self, sub_object_range_index);
-    }
-
-    pub fn getSubObjectRangeSpaceOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) i64 {
-        return spReflectionTypeLayout_getSubObjectRangeSpaceOffset(self, sub_object_range_index);
-    }
-
-    pub fn getSubObjectRangeOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) *VariableLayoutReflection {
-        return spReflectionTypeLayout_getSubObjectRangeOffset(self, sub_object_range_index);
-    }
-
-    extern fn spReflectionTypeLayout_GetType(self: *TypeLayoutReflection) *TypeReflection;
-    extern fn spReflectionTypeLayout_getKind(self: *TypeLayoutReflection) TypeReflection.Kind;
-    extern fn spReflectionTypeLayout_GetSize(self: *TypeLayoutReflection, category: ParameterCategory) usize;
-    extern fn spReflectionTypeLayout_GetStride(self: *TypeLayoutReflection, category: ParameterCategory) usize;
-    extern fn spReflectionTypeLayout_getAlignment(self: *TypeLayoutReflection, category: ParameterCategory) i32;
-    extern fn spReflectionTypeLayout_GetFieldCount(self: *TypeLayoutReflection) u32;
-    extern fn spReflectionTypeLayout_GetFieldByIndex(self: *TypeLayoutReflection, index: u32) *VariableLayoutReflection;
-    extern fn spReflectionTypeLayout_findFieldIndexByName(self: *TypeLayoutReflection, name_begin: [*]const u8, name_end: [*]const u8) i64;
-    extern fn spReflectionTypeLayout_GetExplicitCounter(self: *TypeLayoutReflection) *VariableLayoutReflection;
-    extern fn spReflectionTypeLayout_GetElementStride(self: *TypeLayoutReflection, category: ParameterCategory) usize;
-    extern fn spReflectionTypeLayout_GetElementTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection;
-    extern fn spReflectionTypeLayout_GetElementVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
-    extern fn spReflectionTypeLayout_getContainerVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
-    extern fn spReflectionTypeLayout_GetParameterCategory(self: *TypeLayoutReflection) ParameterCategory;
-    extern fn spReflectionTypeLayout_GetCategoryCount(self: *TypeLayoutReflection) u32;
-    extern fn spReflectionTypeLayout_GetCategoryByIndex(self: *TypeLayoutReflection, index: u32) ParameterCategory;
-    extern fn spReflectionTypeLayout_GetMatrixLayoutMode(self: *TypeLayoutReflection) MatrixLayoutMode;
-    extern fn spReflectionTypeLayout_getGenericParamIndex(self: *TypeLayoutReflection) i32;
-    extern fn spReflectionTypeLayout_getPendingDataTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection;
-    extern fn spReflectionTypeLayout_getSpecializedTypePendingDataVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
-    extern fn spReflectionTypeLayout_getBindingRangeCount(self: *TypeLayoutReflection) i64;
-    extern fn spReflectionTypeLayout_getBindingRangeType(self: *TypeLayoutReflection, index: i64) BindingType;
-    extern fn spReflectionTypeLayout_isBindingRangeSpecializable(self: *TypeLayoutReflection, index: i64) i64;
-    extern fn spReflectionTypeLayout_getBindingRangeBindingCount(self: *TypeLayoutReflection, index: i64) i64;
-    extern fn spReflectionTypeLayout_getBindingRangeLeafTypeLayout(self: *TypeLayoutReflection, index: i64) *TypeLayoutReflection;
-    extern fn spReflectionTypeLayout_getBindingRangeLeafVariable(self: *TypeLayoutReflection, index: i64) *VariableReflection;
-    extern fn spReflectionTypeLayout_getBindingRangeImageFormat(self: *TypeLayoutReflection, index: i64) ImageFormat;
-    extern fn spReflectionTypeLayout_getFieldBindingRangeOffset(self: *TypeLayoutReflection, field_index: i64) i64;
-    extern fn spReflectionTypeLayout_getExplicitCounterBindingRangeOffset(self: *TypeLayoutReflection) i64;
-    extern fn spReflectionTypeLayout_getBindingRangeDescriptorSetIndex(self: *TypeLayoutReflection, index: i64) i64;
-    extern fn spReflectionTypeLayout_getBindingRangeFirstDescriptorRangeIndex(self: *TypeLayoutReflection, index: i64) i64;
-    extern fn spReflectionTypeLayout_getBindingRangeDescriptorRangeCount(self: *TypeLayoutReflection, index: i64) i64;
-    extern fn spReflectionTypeLayout_getDescriptorSetCount(self: *TypeLayoutReflection) i64;
-    extern fn spReflectionTypeLayout_getDescriptorSetSpaceOffset(self: *TypeLayoutReflection, set_index: i64) i64;
-    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeCount(self: *TypeLayoutReflection, set_index: i64) i64;
-    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeIndexOffset(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64;
-    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeDescriptorCount(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64;
-    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeType(self: *TypeLayoutReflection, set_index: i64, range_index: i64) BindingType;
-    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeCategory(self: *TypeLayoutReflection, set_index: i64, range_index: i64) ParameterCategory;
-    extern fn spReflectionTypeLayout_getSubObjectRangeCount(self: *TypeLayoutReflection) i64;
-    extern fn spReflectionTypeLayout_getSubObjectRangeBindingRangeIndex(self: *TypeLayoutReflection, sub_object_range_index: i64) i64;
-    extern fn spReflectionTypeLayout_getSubObjectRangeSpaceOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) i64;
-    extern fn spReflectionTypeLayout_getSubObjectRangeOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) *VariableLayoutReflection;
+    pub const getBindingRangeBindingCount = cdef.spReflectionTypeLayout_getBindingRangeBindingCount;
+    pub const getFieldBindingRangeOffset = cdef.spReflectionTypeLayout_getFieldBindingRangeOffset;
+    pub const getExplicitCounterBindingRangeOffset = cdef.spReflectionTypeLayout_getExplicitCounterBindingRangeOffset;
+    pub const getBindingRangeLeafTypeLayout = cdef.spReflectionTypeLayout_getBindingRangeLeafTypeLayout;
+    pub const getBindingRangeLeafVariable = cdef.spReflectionTypeLayout_getBindingRangeLeafVariable;
+    pub const getBindingRangeImageFormat = cdef.spReflectionTypeLayout_getBindingRangeImageFormat;
+    pub const getBindingRangeDescriptorSetIndex = cdef.spReflectionTypeLayout_getBindingRangeDescriptorSetIndex;
+    pub const getBindingRangeFirstDescriptorRangeIndex = cdef.spReflectionTypeLayout_getBindingRangeFirstDescriptorRangeIndex;
+    pub const getBindingRangeDescriptorRangeCount = cdef.spReflectionTypeLayout_getBindingRangeDescriptorRangeCount;
+    pub const getDescriptorSetCount = cdef.spReflectionTypeLayout_getDescriptorSetCount;
+    pub const getDescriptorSetSpaceOffset = cdef.spReflectionTypeLayout_getDescriptorSetSpaceOffset;
+    pub const getDescriptorSetDescriptorRangeCount = cdef.spReflectionTypeLayout_getDescriptorSetDescriptorRangeCount;
+    pub const getDescriptorSetDescriptorRangeIndexOffset = cdef.spReflectionTypeLayout_getDescriptorSetDescriptorRangeIndexOffset;
+    pub const getDescriptorSetDescriptorRangeDescriptorCount = cdef.spReflectionTypeLayout_getDescriptorSetDescriptorRangeDescriptorCount;
+    pub const getDescriptorSetDescriptorRangeType = cdef.spReflectionTypeLayout_getDescriptorSetDescriptorRangeType;
+    pub const getDescriptorSetDescriptorRangeCategory = cdef.spReflectionTypeLayout_getDescriptorSetDescriptorRangeCategory;
+    pub const getSubObjectRangeCount = cdef.spReflectionTypeLayout_getSubObjectRangeCount;
+    pub const getSubObjectRangeBindingRangeIndex = cdef.spReflectionTypeLayout_getSubObjectRangeBindingRangeIndex;
+    pub const getSubObjectRangeSpaceOffset = cdef.spReflectionTypeLayout_getSubObjectRangeSpaceOffset;
+    pub const getSubObjectRangeOffset = cdef.spReflectionTypeLayout_getSubObjectRangeOffset;
 };
 
 pub const ModifierID = enum(u32) {
@@ -1946,67 +1701,32 @@ pub const ModifierID = enum(u32) {
 pub const Modifier = opaque {};
 
 pub const VariableReflection = opaque {
-    pub fn getName(self: *VariableReflection) cstring {
-        return spReflectionVariable_GetName(self);
-    }
-
-    pub fn getType(self: *VariableReflection) *TypeReflection {
-        return spReflectionVariable_GetType(self);
-    }
-
-    pub fn findModifier(self: *VariableReflection, id: ModifierID) *Modifier {
-        return spReflectionVariable_FindModifier(self, id);
-    }
-
-    pub fn getUserAttributeCount(self: *VariableReflection) u32 {
-        return spReflectionVariable_GetUserAttributeCount(self);
-    }
-
-    pub fn getUserAttributeByIndex(self: *VariableReflection, index: u32) *UserAttribute {
-        return spReflectionVariable_GetUserAttribute(self, index);
-    }
-
-    pub fn findUserAttributeByName(self: *VariableReflection, global_session: *IGlobalSession, name: cstring) *UserAttribute {
-        return spReflectionVariable_FindUserAttributeByName(self, global_session, name);
-    }
+    pub const getName = cdef.spReflectionVariable_GetName;
+    pub const getType = cdef.spReflectionVariable_GetType;
+    pub const findModifier = cdef.spReflectionVariable_FindModifier;
+    pub const getUserAttributeCount = cdef.spReflectionVariable_GetUserAttributeCount;
+    pub const getUserAttributeByIndex = cdef.spReflectionVariable_GetUserAttribute;
+    pub const findUserAttributeByName = cdef.spReflectionVariable_FindUserAttributeByName;
     pub const findAttributeByName = findUserAttributeByName;
 
     pub fn hasDefaultValue(self: *VariableReflection) bool {
-        return spReflectionVariable_HasDefaultValue(self);
+        return cdef.spReflectionVariable_HasDefaultValue(self);
     }
 
     pub fn getDefaultValueInt(self: *VariableReflection) !i64 {
         var result: i64 = undefined;
-        try spReflectionVariable_GetDefaultValueInt(self, &result).check();
+        try cdef.spReflectionVariable_GetDefaultValueInt(self, &result).check();
         return result;
     }
 
-    pub fn getGenericContainer(self: *VariableReflection) *GenericReflection {
-        return spReflectionVariable_GetGenericContainer(self);
-    }
-
-    pub fn applySpecializations(self: *VariableReflection, generic: *GenericReflection) *VariableReflection {
-        return spReflectionVariable_applySpecializations(self, generic);
-    }
-
-    extern fn spReflectionVariable_GetName(self: *VariableReflection) cstring;
-    extern fn spReflectionVariable_GetType(self: *VariableReflection) *TypeReflection;
-    extern fn spReflectionVariable_FindModifier(self: *VariableReflection, id: ModifierID) *Modifier;
-    extern fn spReflectionVariable_GetUserAttributeCount(self: *VariableReflection) u32;
-    extern fn spReflectionVariable_GetUserAttribute(self: *VariableReflection, index: u32) *UserAttribute;
-    extern fn spReflectionVariable_FindUserAttributeByName(self: *VariableReflection, global_session: *IGlobalSession, name: cstring) *UserAttribute;
-    extern fn spReflectionVariable_HasDefaultValue(self: *VariableReflection) bool;
-    extern fn spReflectionVariable_GetDefaultValueInt(self: *VariableReflection, rs: *i64) Result;
-    extern fn spReflectionVariable_GetGenericContainer(self: *VariableReflection) *GenericReflection;
-    extern fn spReflectionVariable_applySpecializations(self: *VariableReflection, generic: *GenericReflection) *VariableReflection;
+    pub const getGenericContainer = cdef.spReflectionVariable_GetGenericContainer;
+    pub const applySpecializations = cdef.spReflectionVariable_applySpecializations;
 };
 
 pub const VariableLayoutReflection = opaque {
-    pub fn getVariable(self: *VariableLayoutReflection) *VariableReflection {
-        return spReflectionVariableLayout_GetVariable(self);
-    }
+    pub const getVariable = cdef.spReflectionVariableLayout_GetVariable;
 
-    pub fn getName(self: *VariableLayoutReflection) cstring {
+    pub fn getName(self: *VariableLayoutReflection) [*:0]const u8 {
         return self.getVariable().getName();
     }
 
@@ -2014,9 +1734,7 @@ pub const VariableLayoutReflection = opaque {
         return self.getVariable().findModifier(id);
     }
 
-    pub fn getTypeLayout(self: *VariableLayoutReflection) *TypeLayoutReflection {
-        return spReflectionVariableLayout_GetTypeLayout(self);
-    }
+    pub const getTypeLayout = cdef.spReflectionVariableLayout_GetTypeLayout;
 
     pub fn getCategory(self: *VariableLayoutReflection) *TypeLayoutReflection {
         return self.getTypeLayout().getParameterCategory();
@@ -2030,371 +1748,134 @@ pub const VariableLayoutReflection = opaque {
         return self.getTypeLayout().getCategoryByIndex(index);
     }
 
-    pub fn getOffset(self: *VariableLayoutReflection, category: ParameterCategory) usize {
-        return spReflectionVariableLayout_GetOffset(self, category);
-    }
+    pub const getOffset = cdef.spReflectionVariableLayout_GetOffset;
 
     pub fn getType(self: *VariableLayoutReflection) *TypeReflection {
         return self.getVariable().getType();
     }
 
-    pub fn getBindingIndex(self: *VariableLayoutReflection) u32 {
-        return spReflectionParameter_GetBindingIndex(self);
-    }
+    pub const getBindingIndex = cdef.spReflectionParameter_GetBindingIndex;
 
+    // NOTE: The c++ API doens't expose this one
     // pub fn getBindingSpace(self: *VariableLayoutReflection) u32 {
     //     return spReflectionParameter_GetBindingSpace(self);
     // }
 
-    pub fn getBindingSpace(self: *VariableLayoutReflection, category: ParameterCategory) usize {
-        return spReflectionVariableLayout_GetSpace(self, category);
-    }
-
-    pub fn getImageFormat(self: *VariableLayoutReflection) ImageFormat {
-        return spReflectionVariableLayout_GetImageFormat(self);
-    }
-
-    pub fn getSemanticName(self: *VariableLayoutReflection) cstring {
-        return spReflectionVariableLayout_GetSemanticName(self);
-    }
-
-    pub fn getSemanticIndex(self: *VariableLayoutReflection) usize {
-        return spReflectionVariableLayout_GetSemanticIndex(self);
-    }
-
-    pub fn getStage(self: *VariableLayoutReflection) usize {
-        return spReflectionVariableLayout_getStage(self);
-    }
-
-    pub fn getPendingDataLayout(self: *VariableLayoutReflection) *VariableLayoutReflection {
-        return spReflectionVariableLayout_getPendingDataLayout(self);
-    }
-
-    extern fn spReflectionVariableLayout_GetVariable(self: *VariableLayoutReflection) *VariableReflection;
-    extern fn spReflectionVariableLayout_GetTypeLayout(self: *VariableLayoutReflection) *TypeLayoutReflection;
-    extern fn spReflectionVariableLayout_GetOffset(self: *VariableLayoutReflection, category: ParameterCategory) usize;
-    extern fn spReflectionVariableLayout_GetSpace(self: *VariableLayoutReflection, category: ParameterCategory) usize;
-    extern fn spReflectionVariableLayout_GetImageFormat(self: *VariableLayoutReflection) ImageFormat;
-    extern fn spReflectionVariableLayout_GetSemanticName(self: *VariableLayoutReflection) cstring;
-    extern fn spReflectionVariableLayout_GetSemanticIndex(self: *VariableLayoutReflection) usize;
-
-    extern fn spReflectionVariableLayout_getStage(self: *VariableLayoutReflection) Stage;
-    extern fn spReflectionVariableLayout_getPendingDataLayout(self: *VariableLayoutReflection) *VariableLayoutReflection;
-
-    extern fn spReflectionParameter_GetBindingIndex(self: *VariableLayoutReflection) u32;
-    extern fn spReflectionParameter_GetBindingSpace(self: *VariableLayoutReflection) u32;
+    pub const getBindingSpace = cdef.spReflectionVariableLayout_GetSpace;
+    pub const getImageFormat = cdef.spReflectionVariableLayout_GetImageFormat;
+    pub const getSemanticName = cdef.spReflectionVariableLayout_GetSemanticName;
+    pub const getSemanticIndex = cdef.spReflectionVariableLayout_GetSemanticIndex;
+    pub const getStage = cdef.spReflectionVariableLayout_getStage;
+    pub const getPendingDataLayout = cdef.spReflectionVariableLayout_getPendingDataLayout;
 };
 
 pub const FunctionReflection = opaque {
-    pub fn getName(self: *FunctionReflection) cstring {
-        return spReflectionFunction_GetName(self);
-    }
-
-    pub fn getReturnType(self: *FunctionReflection) *TypeReflection {
-        return spReflectionFunction_GetResultType(self);
-    }
-
-    pub fn getParameterCount(self: *FunctionReflection) u32 {
-        return spReflectionFunction_GetParameterCount(self);
-    }
-
-    pub fn getParameterByIndex(self: *FunctionReflection, index: u32) *VariableReflection {
-        return spReflectionFunction_GetParameter(self, index);
-    }
-
-    pub fn getUserAttributeCount(self: *FunctionReflection) u32 {
-        return spReflectionFunction_GetUserAttributeCount(self);
-    }
-
-    pub fn getUserAttributeByIndex(self: *FunctionReflection, index: u32) *UserAttribute {
-        return spReflectionFunction_GetUserAttribute(self, index);
-    }
-
-    pub fn findUserAttributeByName(self: *FunctionReflection, global_session: *ISession, name: cstring) *UserAttribute {
-        return spReflectionFunction_FindUserAttributeByName(self, global_session, name);
-    }
-
-    pub fn findModifier(self: *FunctionReflection, id: ModifierID) *Modifier {
-        return spReflectionFunction_FindModifier(self, id);
-    }
-
-    pub fn getGenericContainer(self: *FunctionReflection) *GenericReflection {
-        return spReflectionFunction_GetGenericContainer(self);
-    }
-
-    pub fn applySpecializations(self: *FunctionReflection, generic: *GenericReflection) *FunctionReflection {
-        return spReflectionFunction_applySpecializations(self, generic);
-    }
+    pub const getName = cdef.spReflectionFunction_GetName;
+    pub const getReturnType = cdef.spReflectionFunction_GetResultType;
+    pub const getParameterCount = cdef.spReflectionFunction_GetParameterCount;
+    pub const getParameterByIndex = cdef.spReflectionFunction_GetParameter;
+    pub const getUserAttributeCount = cdef.spReflectionFunction_GetUserAttributeCount;
+    pub const getUserAttributeByIndex = cdef.spReflectionFunction_GetUserAttribute;
+    pub const findUserAttributeByName = cdef.spReflectionFunction_FindUserAttributeByName;
+    pub const findModifier = cdef.spReflectionFunction_FindModifier;
+    pub const getGenericContainer = cdef.spReflectionFunction_GetGenericContainer;
+    pub const applySpecializations = cdef.spReflectionFunction_applySpecializations;
 
     pub fn specializeWithArgTypes(self: *FunctionReflection, arg_types: []const *TypeReflection) *FunctionReflection {
-        return spReflectionFunction_specializeWithArgTypes(self, @intCast(arg_types.len), arg_types.ptr);
+        return cdef.spReflectionFunction_specializeWithArgTypes(self, @intCast(arg_types.len), arg_types.ptr);
     }
 
-    pub fn isOverloaded(self: *FunctionReflection) bool {
-        return spReflectionFunction_isOverloaded(self);
-    }
-
-    pub fn getOverloadCount(self: *FunctionReflection) u32 {
-        return spReflectionFunction_getOverloadCount(self);
-    }
-
-    pub fn getOverload(self: *FunctionReflection, index: u32) *FunctionReflection {
-        return spReflectionFunction_getOverload(self, index);
-    }
-
-    extern fn spReflectionFunction_GetName(self: *FunctionReflection) cstring;
-    extern fn spReflectionFunction_FindModifier(self: *FunctionReflection, id: ModifierID) *Modifier;
-    extern fn spReflectionFunction_GetUserAttributeCount(self: *FunctionReflection) u32;
-    extern fn spReflectionFunction_GetUserAttribute(self: *FunctionReflection, index: u32) *UserAttribute;
-    extern fn spReflectionFunction_FindUserAttributeByName(self: *FunctionReflection, global_session: *ISession, name: cstring) *UserAttribute;
-    extern fn spReflectionFunction_GetParameterCount(self: *FunctionReflection) u32;
-    extern fn spReflectionFunction_GetParameter(self: *FunctionReflection, index: u32) *VariableReflection;
-    extern fn spReflectionFunction_GetResultType(self: *FunctionReflection) *TypeReflection;
-    extern fn spReflectionFunction_GetGenericContainer(self: *FunctionReflection) *GenericReflection;
-    extern fn spReflectionFunction_applySpecializations(self: *FunctionReflection, generic: *GenericReflection) *FunctionReflection;
-    extern fn spReflectionFunction_specializeWithArgTypes(self: *FunctionReflection, arg_type_count: i64, arg_types: [*]const *TypeReflection) *FunctionReflection;
-    extern fn spReflectionFunction_isOverloaded(self: *FunctionReflection) bool;
-    extern fn spReflectionFunction_getOverloadCount(self: *FunctionReflection) u32;
-    extern fn spReflectionFunction_getOverload(self: *FunctionReflection, index: u32) *FunctionReflection;
+    pub const isOverloaded = cdef.spReflectionFunction_isOverloaded;
+    pub const getOverloadCount = cdef.spReflectionFunction_getOverloadCount;
+    pub const getOverload = cdef.spReflectionFunction_getOverload;
 };
 
 pub const GenericReflection = opaque {
-    pub fn asDecl(self: *GenericReflection) *DeclReflection {
-        return spReflectionGeneric_asDecl(self);
-    }
-
-    pub fn getName(self: *GenericReflection) cstring {
-        return spReflectionGeneric_GetName(self);
-    }
-
-    pub fn getTypeParameterCount(self: *GenericReflection) u32 {
-        return spReflectionGeneric_GetTypeParameterCount(self);
-    }
-
-    pub fn getTypeParameter(self: *GenericReflection, index: u32) *VariableReflection {
-        return spReflectionGeneric_GetTypeParameter(self, index);
-    }
-
-    pub fn getValueParameterCount(self: *GenericReflection) u32 {
-        return spReflectionGeneric_GetValueParameterCount(self);
-    }
-
-    pub fn getValueParameter(self: *GenericReflection, index: u32) *VariableReflection {
-        return spReflectionGeneric_GetValueParameter(self, index);
-    }
-
-    pub fn getTypeParameterConstraintCount(self: *GenericReflection, type_param: *VariableReflection) u32 {
-        return spReflectionGeneric_GetTypeParameterConstraintCount(self, type_param);
-    }
-
-    pub fn getTypeParameterConstraintType(self: *GenericReflection, type_param: *VariableReflection, index: u32) *TypeReflection {
-        return spReflectionGeneric_GetTypeParameterConstraintType(self, type_param, index);
-    }
-
-    pub fn getInnerDecl(self: *GenericReflection) *DeclReflection {
-        return spReflectionGeneric_GetInnerDecl(self);
-    }
-
-    pub fn getInnerKind(self: *GenericReflection) DeclKind {
-        return spReflectionGeneric_GetInnerKind(self);
-    }
-
-    pub fn getOuterGenericContainer(self: *GenericReflection) *GenericReflection {
-        return spReflectionGeneric_GetOuterGenericContainer(self);
-    }
-
-    pub fn getConcreteType(self: *GenericReflection, type_param: *VariableReflection) *TypeReflection {
-        return spReflectionGeneric_GetConcreteType(self, type_param);
-    }
-
-    pub fn getConcreteIntVal(self: *GenericReflection, value_param: *VariableReflection) i64 {
-        return spReflectionGeneric_GetConcreteIntVal(self, value_param);
-    }
-
-    pub fn applySpecializations(self: *GenericReflection, generic: *GenericReflection) *GenericReflection {
-        return spReflectionGeneric_applySpecializations(self, generic);
-    }
-
-    extern fn spReflectionGeneric_asDecl(self: *GenericReflection) *DeclReflection;
-    extern fn spReflectionGeneric_GetName(self: *GenericReflection) cstring;
-    extern fn spReflectionGeneric_GetTypeParameterCount(self: *GenericReflection) u32;
-    extern fn spReflectionGeneric_GetTypeParameter(self: *GenericReflection, index: u32) *VariableReflection;
-    extern fn spReflectionGeneric_GetValueParameterCount(self: *GenericReflection) u32;
-    extern fn spReflectionGeneric_GetValueParameter(self: *GenericReflection, index: u32) *VariableReflection;
-    extern fn spReflectionGeneric_GetTypeParameterConstraintCount(self: *GenericReflection, type_param: *VariableReflection) u32;
-    extern fn spReflectionGeneric_GetTypeParameterConstraintType(self: *GenericReflection, type_param: *VariableReflection, index: u32) *TypeReflection;
-    extern fn spReflectionGeneric_GetInnerKind(self: *GenericReflection) DeclKind;
-    extern fn spReflectionGeneric_GetInnerDecl(self: *GenericReflection) *DeclReflection;
-    extern fn spReflectionGeneric_GetOuterGenericContainer(self: *GenericReflection) *GenericReflection;
-    extern fn spReflectionGeneric_GetConcreteType(self: *GenericReflection, type_param: *VariableReflection) *TypeReflection;
-    extern fn spReflectionGeneric_GetConcreteIntVal(self: *GenericReflection, value_param: *VariableReflection) i64;
-    extern fn spReflectionGeneric_applySpecializations(self: *GenericReflection, generic: *GenericReflection) *GenericReflection;
+    pub const asDecl = cdef.spReflectionGeneric_asDecl;
+    pub const getName = cdef.spReflectionGeneric_GetName;
+    pub const getTypeParameterCount = cdef.spReflectionGeneric_GetTypeParameterCount;
+    pub const getTypeParameter = cdef.spReflectionGeneric_GetTypeParameter;
+    pub const getValueParameterCount = cdef.spReflectionGeneric_GetValueParameterCount;
+    pub const getValueParameter = cdef.spReflectionGeneric_GetValueParameter;
+    pub const getTypeParameterConstraintCount = cdef.spReflectionGeneric_GetTypeParameterConstraintCount;
+    pub const getTypeParameterConstraintType = cdef.spReflectionGeneric_GetTypeParameterConstraintType;
+    pub const getInnerDecl = cdef.spReflectionGeneric_GetInnerDecl;
+    pub const getInnerKind = cdef.spReflectionGeneric_GetInnerKind;
+    pub const getOuterGenericContainer = cdef.spReflectionGeneric_GetOuterGenericContainer;
+    pub const getConcreteType = cdef.spReflectionGeneric_GetConcreteType;
+    pub const getConcreteIntVal = cdef.spReflectionGeneric_GetConcreteIntVal;
+    pub const applySpecializations = cdef.spReflectionGeneric_applySpecializations;
 };
 
 pub const EntryPointReflection = opaque {
-    pub fn getName(self: *EntryPointReflection) cstring {
-        return spReflectionEntryPoint_getName(self);
+    pub const getName = cdef.spReflectionEntryPoint_getName;
+    pub const getNameOverride = cdef.spReflectionEntryPoint_getNameOverride;
+    pub const getParameterCount = cdef.spReflectionEntryPoint_getParameterCount;
+    pub const getFunction = cdef.spReflectionEntryPoint_getFunction;
+    pub const getParameterByIndex = cdef.spReflectionEntryPoint_getParameterByIndex;
+    pub const getStage = cdef.spReflectionEntryPoint_getStage;
+
+    pub fn getComputeThreadGroupSize(self: *EntryPointReflection, axis_count: u64) u64 {
+        var size_along_axis: u64 = undefined;
+        cdef.spReflectionEntryPoint_getComputeThreadGroupSize(self, axis_count, &size_along_axis);
+        return size_along_axis;
     }
 
-    pub fn getNameOverride(self: *EntryPointReflection) cstring {
-        return spReflectionEntryPoint_getNameOverride(self);
-    }
-
-    pub fn getParameterCount(self: *EntryPointReflection) u32 {
-        return spReflectionEntryPoint_getParameterCount(self);
-    }
-
-    pub fn getFunction(self: *EntryPointReflection) *FunctionReflection {
-        return spReflectionEntryPoint_getFunction(self);
-    }
-
-    pub fn getParameterByIndex(self: *EntryPointReflection, index: u32) *VariableLayoutReflection {
-        return spReflectionEntryPoint_getParameterByIndex(self, index);
-    }
-
-    pub fn getStage(self: *EntryPointReflection) Stage {
-        return spReflectionEntryPoint_getStage(self);
-    }
-
-    pub fn getComputeThreadGroupSize(self: *EntryPointReflection, axis_count: u64, out_size_along_axis: *u64) void {
-        return spReflectionEntryPoint_getComputeThreadGroupSize(self, axis_count, out_size_along_axis);
-    }
-
-    pub fn getComputeWaveSize(self: *EntryPointReflection, out_wave_size: *u64) void {
-        return spReflectionEntryPoint_getComputeWaveSize(self, out_wave_size);
+    pub fn getComputeWaveSize(self: *EntryPointReflection) u64 {
+        var wave_size: u64 = undefined;
+        cdef.spReflectionEntryPoint_getComputeWaveSize(self, &wave_size);
+        return wave_size;
     }
 
     pub fn usesAnySampleRateInput(self: *EntryPointReflection) bool {
-        return spReflectionEntryPoint_usesAnySampleRateInput(self) != 0;
+        return cdef.spReflectionEntryPoint_usesAnySampleRateInput(self) != 0;
     }
 
-    pub fn getVarLayout(self: *EntryPointReflection) *VariableLayoutReflection {
-        return spReflectionEntryPoint_getVarLayout(self);
-    }
+    pub const getVarLayout = cdef.spReflectionEntryPoint_getVarLayout;
 
     pub fn getTypeLayout(self: *EntryPointReflection) *TypeLayoutReflection {
         return self.getVarLayout().getTypeLayout();
     }
 
-    pub fn getResultVarLayout(self: *EntryPointReflection) *VariableLayoutReflection {
-        return spReflectionEntryPoint_getResultVarLayout(self);
-    }
+    pub const getResultVarLayout = cdef.spReflectionEntryPoint_getResultVarLayout;
 
     pub fn hasDefaultConstantBuffer(self: *EntryPointReflection) bool {
-        return spReflectionEntryPoint_hasDefaultConstantBuffer(self) != 0;
+        return cdef.spReflectionEntryPoint_hasDefaultConstantBuffer(self) != 0;
     }
-
-    extern fn spReflectionEntryPoint_getName(self: *EntryPointReflection) cstring;
-    extern fn spReflectionEntryPoint_getNameOverride(self: *EntryPointReflection) cstring;
-    extern fn spReflectionEntryPoint_getFunction(self: *EntryPointReflection) *FunctionReflection;
-    extern fn spReflectionEntryPoint_getParameterCount(self: *EntryPointReflection) u32;
-    extern fn spReflectionEntryPoint_getParameterByIndex(self: *EntryPointReflection, index: u32) *VariableLayoutReflection;
-    extern fn spReflectionEntryPoint_getStage(self: *EntryPointReflection) Stage;
-    extern fn spReflectionEntryPoint_getComputeThreadGroupSize(self: *EntryPointReflection, axis_count: u64, out_size_along_axis: *u64) void;
-    extern fn spReflectionEntryPoint_getComputeWaveSize(self: *EntryPointReflection, out_wave_size: *u64) void;
-    extern fn spReflectionEntryPoint_usesAnySampleRateInput(self: *EntryPointReflection) i32;
-    extern fn spReflectionEntryPoint_getVarLayout(self: *EntryPointReflection) *VariableLayoutReflection;
-    extern fn spReflectionEntryPoint_getResultVarLayout(self: *EntryPointReflection) *VariableLayoutReflection;
-    extern fn spReflectionEntryPoint_hasDefaultConstantBuffer(self: *EntryPointReflection) i32;
 };
 pub const EntryPointLayout = EntryPointReflection;
 
 pub const TypeParameterReflection = opaque {
-    pub fn getName(self: TypeParameterReflection) cstring {
-        return spReflectionTypeParameter_GetName(self);
-    }
-
-    pub fn getIndex(self: TypeParameterReflection) u32 {
-        return spReflectionTypeParameter_GetIndex(self);
-    }
-
-    pub fn getConstraintCount(self: TypeParameterReflection) u32 {
-        return spReflectionTypeParameter_GetConstraintCount(self);
-    }
-
-    pub fn getConstraintByIndex(self: TypeParameterReflection, index: u32) *TypeReflection {
-        return spReflectionTypeParameter_GetConstraintByIndex(self, index);
-    }
-
-    extern fn spReflectionTypeParameter_GetName(self: TypeParameterReflection) cstring;
-    extern fn spReflectionTypeParameter_GetIndex(self: TypeParameterReflection) u32;
-    extern fn spReflectionTypeParameter_GetConstraintCount(self: TypeParameterReflection) u32;
-    extern fn spReflectionTypeParameter_GetConstraintByIndex(self: TypeParameterReflection, index: u32) *TypeReflection;
+    pub const getName = cdef.spReflectionTypeParameter_GetName;
+    pub const getIndex = cdef.spReflectionTypeParameter_GetIndex;
+    pub const getConstraintCount = cdef.spReflectionTypeParameter_GetConstraintCount;
+    pub const getConstraintByIndex = cdef.spReflectionTypeParameter_GetConstraintByIndex;
 };
 
 pub const ShaderReflection = opaque {
-    pub fn getParameterCount(self: *ShaderReflection) u32 {
-        return spReflection_GetParameterCount(self);
-    }
-
-    pub fn getTypeParameterCount(self: *ShaderReflection) u32 {
-        return spReflection_GetTypeParameterCount(self);
-    }
-
-    pub fn getSession(self: *ShaderReflection) *ISession {
-        return spReflection_GetSession(self);
-    }
-
-    pub fn getTypeParameterByIndex(self: *ShaderReflection, index: u32) *TypeParameterReflection {
-        return spReflection_GetTypeParameterByIndex(self, index);
-    }
-
-    pub fn findTypeParameter(self: *ShaderReflection, name: cstring) *TypeParameterReflection {
-        return spReflection_FindTypeParameter(self, name);
-    }
-
-    pub fn getParameterByIndex(self: *ShaderReflection, index: u32) *VariableLayoutReflection {
-        return spReflection_GetParameterByIndex(self, index);
-    }
-
-    pub fn get(request: *ICompileRequest) *ProgramLayout {
-        return spGetReflection(request);
-    }
-
-    pub fn getEntryPointCount(self: *ShaderReflection) u64 {
-        return spReflection_getEntryPointCount(self);
-    }
-
-    pub fn getEntryPointByIndex(self: *ShaderReflection, index: u64) *EntryPointReflection {
-        return spReflection_getEntryPointByIndex(self, index);
-    }
-
-    pub fn getGlobalConstantBufferBinding(self: *ShaderReflection) u64 {
-        return spReflection_getGlobalConstantBufferBinding(self);
-    }
-
-    pub fn getGlobalConstantBufferSize(self: *ShaderReflection) usize {
-        return spReflection_getGlobalConstantBufferSize(self);
-    }
-
-    pub fn findTypeByName(self: *ShaderReflection, name: cstring) *TypeReflection {
-        return spReflection_FindTypeByName(self, name);
-    }
-
-    pub fn findFunctionByName(self: *ShaderReflection, name: cstring) *FunctionReflection {
-        return spReflection_FindFunctionByName(self, name);
-    }
-
-    pub fn findFunctionByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *FunctionReflection {
-        return spReflection_FindFunctionByNameInType(self, refl_type, name);
-    }
+    pub const getParameterCount = cdef.spReflection_GetParameterCount;
+    pub const getTypeParameterCount = cdef.spReflection_GetTypeParameterCount;
+    pub const getSession = cdef.spReflection_GetSession;
+    pub const getTypeParameterByIndex = cdef.spReflection_GetTypeParameterByIndex;
+    pub const findTypeParameter = cdef.spReflection_FindTypeParameter;
+    pub const getParameterByIndex = cdef.spReflection_GetParameterByIndex;
+    pub const get = cdef.spGetReflection;
+    pub const getEntryPointCount = cdef.spReflection_getEntryPointCount;
+    pub const getEntryPointByIndex = cdef.spReflection_getEntryPointByIndex;
+    pub const getGlobalConstantBufferBinding = cdef.spReflection_getGlobalConstantBufferBinding;
+    pub const getGlobalConstantBufferSize = cdef.spReflection_getGlobalConstantBufferSize;
+    pub const findTypeByName = cdef.spReflection_FindTypeByName;
+    pub const findFunctionByName = cdef.spReflection_FindFunctionByName;
+    pub const findFunctionByNameInType = cdef.spReflection_FindFunctionByNameInType;
 
     /// Deprecated
     pub fn tryResolveOverloadedFunction(self: *ShaderReflection, candidates: []*FunctionReflection) *FunctionReflection {
-        return spReflection_TryResolveOverloadedFunction(self, @intCast(candidates.len), candidates.ptr);
+        return cdef.spReflection_TryResolveOverloadedFunction(self, @intCast(candidates.len), candidates.ptr);
     }
 
-    pub fn findVarByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *VariableReflection {
-        return spReflection_FindVarByNameInType(self, refl_type, name);
-    }
-
-    pub fn getTypeLayout(self: *ShaderReflection, reflection_type: *TypeReflection, rules: LayoutRules) *TypeLayoutReflection {
-        return spReflection_GetTypeLayout(self, reflection_type, rules);
-    }
-
-    pub fn findEntryPointByName(self: *ShaderReflection, name: cstring) *EntryPointReflection {
-        return spReflection_findEntryPointByName(self, name);
-    }
+    pub const findVarByNameInType = cdef.spReflection_FindVarByNameInType;
+    pub const getTypeLayout = cdef.spReflection_GetTypeLayout;
+    pub const findEntryPointByName = cdef.spReflection_findEntryPointByName;
 
     pub fn specializeType(
         self: *ShaderReflection,
@@ -2404,7 +1885,7 @@ pub const ShaderReflection = opaque {
     ) *TypeReflection {
         const diagnostics = getDiagnosticsPtr(out_diagnostics);
         defer logDiagnostics(diagnostics, out_diagnostics);
-        return spReflection_specializeType(self, type_refl, @intCast(specialization_args.len), specialization_args.ptr, diagnostics);
+        return cdef.spReflection_specializeType(self, type_refl, @intCast(specialization_args.len), specialization_args.ptr, diagnostics);
     }
 
     pub fn specializeGeneric(
@@ -2417,127 +1898,40 @@ pub const ShaderReflection = opaque {
         std.debug.assert(arg_types.len == args.len);
         const diagnostics = getDiagnosticsPtr(out_diagnostics);
         defer logDiagnostics(diagnostics, out_diagnostics);
-        return spReflection_specializeGeneric(self, generic, @intCast(args.len), arg_types.ptr, args.ptr, diagnostics);
+        return cdef.spReflection_specializeGeneric(self, generic, @intCast(args.len), arg_types.ptr, args.ptr, diagnostics);
     }
 
-    pub fn isSubType(self: *ShaderReflection, sub_type: *TypeReflection, super_type: *TypeReflection) bool {
-        return spReflection_isSubType(self, sub_type, super_type);
-    }
-
-    pub fn getHashedStringCount(self: *ShaderReflection) u64 {
-        return spReflection_getHashedStringCount(self);
-    }
+    pub const isSubType = cdef.spReflection_isSubType;
+    pub const getHashedStringCount = cdef.spReflection_getHashedStringCount;
 
     pub fn getHashedString(self: *ShaderReflection, index: u64) [:0]const u8 {
         var size: usize = undefined;
-        const bytes = spReflection_getHashedString(self, index, &size);
+        const bytes = cdef.spReflection_getHashedString(self, index, &size);
         return bytes[0..size];
     }
 
-    pub fn getGlobalParamsTypeLayout(self: *ShaderReflection) *TypeLayoutReflection {
-        return spReflection_getGlobalParamsTypeLayout(self);
-    }
-
-    pub fn getGlobalParamsVarLayout(self: *ShaderReflection) *VariableLayoutReflection {
-        return spReflection_getGlobalParamsVarLayout(self);
-    }
+    pub const getGlobalParamsTypeLayout = cdef.spReflection_getGlobalParamsTypeLayout;
+    pub const getGlobalParamsVarLayout = cdef.spReflection_getGlobalParamsVarLayout;
 
     pub fn toJson(self: *ShaderReflection) !*IBlob {
         var blob: *IBlob = undefined;
-        try spReflection_ToJson(self, null, &blob);
+        try cdef.spReflection_ToJson(self, null, &blob);
         return blob;
     }
-
-    extern fn spReflection_ToJson(self: *ShaderReflection, request: ?*ICompileRequest, out_blob: **IBlob) Result;
-    extern fn spReflection_GetParameterCount(self: *ShaderReflection) u32;
-    extern fn spReflection_GetParameterByIndex(self: *ShaderReflection, index: u32) *VariableLayoutReflection;
-    extern fn spReflection_GetTypeParameterCount(self: *ShaderReflection) u32;
-    extern fn spReflection_GetTypeParameterByIndex(self: *ShaderReflection, index: u32) *TypeParameterReflection;
-    extern fn spReflection_FindTypeParameter(self: *ShaderReflection, name: cstring) *TypeParameterReflection;
-    extern fn spReflection_FindTypeByName(self: *ShaderReflection, name: cstring) *TypeReflection;
-    extern fn spReflection_GetTypeLayout(self: *ShaderReflection, reflection_type: *TypeReflection, rules: LayoutRules) *TypeLayoutReflection;
-    extern fn spReflection_FindFunctionByName(self: *ShaderReflection, name: cstring) *FunctionReflection;
-    extern fn spReflection_FindFunctionByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *FunctionReflection;
-    extern fn spReflection_FindVarByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: cstring) *VariableReflection;
-    extern fn spReflection_TryResolveOverloadedFunction(self: *ShaderReflection, candidate_count: u32, candidates: **FunctionReflection) *FunctionReflection;
-
-    extern fn spReflection_getEntryPointCount(self: *ShaderReflection) u64;
-    extern fn spReflection_getEntryPointByIndex(self: *ShaderReflection, index: u64) *EntryPointReflection;
-    extern fn spReflection_findEntryPointByName(self: *ShaderReflection, name: cstring) *EntryPointReflection;
-    extern fn spReflection_getGlobalConstantBufferBinding(self: *ShaderReflection) u64;
-    extern fn spReflection_getGlobalConstantBufferSize(self: *ShaderReflection) usize;
-
-    extern fn spReflection_specializeType(
-        self: *ShaderReflection,
-        type: *TypeReflection,
-        specialization_arg_count: i64,
-        specialization_args: [*]const *TypeReflection,
-        out_diagnostics: ?**IBlob,
-    ) *TypeReflection;
-
-    extern fn spReflection_specializeGeneric(
-        self: *ShaderReflection,
-        generic: *GenericReflection,
-        arg_count: i64,
-        arg_types: [*]const *GenericArgType,
-        args: [*]const *GenericArgReflection,
-        out_diagnostics: ?**IBlob,
-    ) *GenericReflection;
-
-    extern fn spReflection_isSubType(self: *ShaderReflection, sub_type: *TypeReflection, super_type: *TypeReflection) bool;
-    extern fn spReflection_getHashedStringCount(self: *ShaderReflection) u64;
-
-    /// Get a hashed string. The number of chars is written in outCount.
-    /// The count does **NOT including terminating 0. The returned string will be 0 terminated.
-    extern fn spReflection_getHashedString(self: *ShaderReflection, index: u64, out_count: *usize) cstring;
-    extern fn spReflection_getGlobalParamsTypeLayout(self: *ShaderReflection) *TypeLayoutReflection;
-    extern fn spReflection_getGlobalParamsVarLayout(self: *ShaderReflection) *VariableLayoutReflection;
-
-    extern fn spReflection_GetSession(self: *ShaderReflection) *ISession;
-    extern fn spGetReflection(request: *ICompileRequest) *ShaderReflection;
 };
 pub const ProgramLayout = ShaderReflection;
 
 pub const DeclReflection = opaque {
-    pub fn getName(self: *DeclReflection) cstring {
-        return spReflectionDecl_getName(self);
-    }
-
-    pub fn getKind(self: *DeclReflection) DeclKind {
-        return spReflectionDecl_getKind(self);
-    }
-
-    pub fn getChildrenCount(self: *DeclReflection) u32 {
-        return spReflectionDecl_getChildrenCount(self);
-    }
-
-    pub fn getChild(self: *DeclReflection, index: u32) *DeclReflection {
-        return spReflectionDecl_getChild(self, index);
-    }
-
-    pub fn getType(self: *DeclReflection) *TypeReflection {
-        return spReflection_getTypeFromDecl(self);
-    }
-
-    pub fn asVariable(self: *DeclReflection) *VariableReflection {
-        return spReflectionDecl_castToVariable(self);
-    }
-
-    pub fn asFunction(self: *DeclReflection) *FunctionReflection {
-        return spReflectionDecl_castToFunction(self);
-    }
-
-    pub fn asGeneric(self: *DeclReflection) *GenericReflection {
-        return spReflectionDecl_castToGeneric(self);
-    }
-
-    pub fn getParent(self: *DeclReflection) *DeclReflection {
-        return spReflectionDecl_getParent(self);
-    }
-
-    pub fn findModifier(self: *DeclReflection, id: ModifierID) *Modifier {
-        return spReflectionDecl_findModifier(self, id);
-    }
+    pub const getName = cdef.spReflectionDecl_getName;
+    pub const getKind = cdef.spReflectionDecl_getKind;
+    pub const getChildrenCount = cdef.spReflectionDecl_getChildrenCount;
+    pub const getChild = cdef.spReflectionDecl_getChild;
+    pub const getType = cdef.spReflection_getTypeFromDecl;
+    pub const asVariable = cdef.spReflectionDecl_castToVariable;
+    pub const asFunction = cdef.spReflectionDecl_castToFunction;
+    pub const asGeneric = cdef.spReflectionDecl_castToGeneric;
+    pub const getParent = cdef.spReflectionDecl_getParent;
+    pub const findModifier = cdef.spReflectionDecl_findModifier;
 
     pub fn getChildernOfKind(self: *DeclReflection, kind: DeclKind) FilteredIterator {
         const count = self.getChildrenCount();
@@ -2590,17 +1984,6 @@ pub const DeclReflection = opaque {
             return self.parent.getChild(self.index);
         }
     };
-
-    extern fn spReflectionDecl_getChildrenCount(self: *DeclReflection) u32;
-    extern fn spReflectionDecl_getChild(self: *DeclReflection, index: u32) *DeclReflection;
-    extern fn spReflectionDecl_getName(self: *DeclReflection) cstring;
-    extern fn spReflectionDecl_getKind(self: *DeclReflection) DeclKind;
-    extern fn spReflectionDecl_castToFunction(self: *DeclReflection) *FunctionReflection;
-    extern fn spReflectionDecl_castToVariable(self: *DeclReflection) *VariableReflection;
-    extern fn spReflectionDecl_castToGeneric(self: *DeclReflection) *GenericReflection;
-    extern fn spReflection_getTypeFromDecl(self: *DeclReflection) *TypeReflection;
-    extern fn spReflectionDecl_getParent(self: *DeclReflection) *DeclReflection;
-    extern fn spReflectionDecl_findModifier(self: *DeclReflection, id: ModifierID) *Modifier;
 };
 
 pub const CompileCoreModuleFlags = packed struct(u32) {
@@ -2676,8 +2059,8 @@ pub const IGlobalSession = extern struct {
         /// Deprecated
         createCompileRequest: *const fn (this: *IGlobalSession, out_compiler_request: **ICompileRequest) callconv(mcall) Result,
         addBuiltins: *const fn (this: *IGlobalSession, source_path: [*:0]const u8, source_string: [*:0]const u8) callconv(mcall) void,
-        setSharedLibraryLoader: *const fn (this: *IGlobalSession, loader: *ISharedLibraryLoader) callconv(mcall) void,
-        getSharedLibraryLoader: *const fn (this: *IGlobalSession) callconv(mcall) *ISharedLibraryLoader,
+        setSharedLibraryLoader: *const fn (this: *IGlobalSession, loader: ?*ISharedLibraryLoader) callconv(mcall) void,
+        getSharedLibraryLoader: *const fn (this: *IGlobalSession) callconv(mcall) ?*ISharedLibraryLoader,
         checkCompileTargetSupport: *const fn (this: *IGlobalSession, target: CompileTarget) callconv(mcall) Result,
         checkPassThroughSupport: *const fn (this: *IGlobalSession, pass_through: PassThrough) callconv(mcall) Result,
         compileCoreModule: *const fn (this: *IGlobalSession, flags: CompileCoreModuleFlags) callconv(mcall) Result,
@@ -2766,12 +2149,12 @@ pub const IGlobalSession = extern struct {
                 vtable.addBuiltins(@ptrCast(self), source_path, source_string);
             }
 
-            fn setSharedLibraryLoader(self: *T, loader: *ISharedLibraryLoader) void {
+            fn setSharedLibraryLoader(self: *T, loader: ?*ISharedLibraryLoader) void {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 vtable.setSharedLibraryLoader(@ptrCast(self), loader);
             }
 
-            fn getSharedLibraryLoader(self: *T) *ISharedLibraryLoader {
+            fn getSharedLibraryLoader(self: *T) ?*ISharedLibraryLoader {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 return vtable.getSharedLibraryLoader(@ptrCast(self));
             }
@@ -3023,10 +2406,10 @@ pub const ISession = extern struct {
     ) ?*IModule {
         const diagnostics = getDiagnosticsPtr(out_diagnostics);
         defer logDiagnostics(diagnostics, out_diagnostics);
-        return slang_loadModuleFromSource(self, module_name, path, source.ptr, source.len, diagnostics);
+        const module = cdef.slang_loadModuleFromSource(self, module_name, path, source.ptr, source.len, diagnostics) orelse return null;
+        module.addRef();
+        return module;
     }
-
-    extern fn slang_loadModuleFromSource(session: *ISession, module_name: [*:0]const u8, path: [*:0]const u8, source: [*:0]const u8, source_size: usize, out_diagnostics: ?**IBlob) ?*IModule;
 
     /// Load a module from IR data.
     /// @param session The session to load the module into.
@@ -3045,10 +2428,10 @@ pub const ISession = extern struct {
     ) ?*IModule {
         const diagnostics = getDiagnosticsPtr(out_diagnostics);
         defer logDiagnostics(diagnostics, out_diagnostics);
-        return slang_loadModuleFromIRBlob(self, module_name, path, source.ptr, source.len, diagnostics);
+        const module = cdef.slang_loadModuleFromIRBlob(self, module_name, path, source.ptr, source.len, diagnostics) orelse return null;
+        module.addRef();
+        return module;
     }
-
-    extern fn slang_loadModuleFromIRBlob(session: *ISession, module_name: [*:0]const u8, path: [*:0]const u8, source: [*]const u8, source_size: usize, out_diagnostics: ?**IBlob) ?*IModule;
 
     /// Read module info (name and version) from IR data.
     /// @param session The session to use for loading module info.
@@ -3060,33 +2443,31 @@ pub const ISession = extern struct {
     /// @return SLANG_OK on success, or an error code on failure.
     pub fn loadModuleInfoFromIR(self: *ISession, source: []const u8) !LoadModuleInfoFromIRBlobResult {
         var result: LoadModuleInfoFromIRBlobResult = undefined;
-        try slang_loadModuleInfoFromIRBlob(self, source.ptr, source.len, &result.module_version, &result.module_compiler_version, &result.module_name).check();
+        try cdef.slang_loadModuleInfoFromIRBlob(self, source.ptr, source.len, &result.module_version, &result.module_compiler_version, &result.module_name).check();
         return result;
     }
-
-    extern fn slang_loadModuleInfoFromIRBlob(session: *ISession, source: [*]const u8, source_size: usize, out_module_version: *i64, out_module_compiler_version: *[*:0]const u8, out_module_name: *[*:0]const u8) Result;
 
     const VTable = extern struct {
         base: IUnknown.VTable,
         getGlobalSession: *const fn (this: *ISession) callconv(mcall) *IGlobalSession,
         loadModule: *const fn (this: *ISession, module_name: [*:0]const u8, out_diagnostics: ?**IBlob) callconv(mcall) ?*IModule,
         loadModuleFromSource: *const fn (this: *ISession, module_name: [*:0]const u8, path: [*:0]const u8, source: *IBlob, out_diagnostics: ?**IBlob) callconv(mcall) ?*IModule,
-        createCompositeComponentType: *const fn (this: *ISession, componentTypes: [*]const *IComponentType, componentTypeCount: i64, out_composite_component_type: **IComponentType, out_diagnostics: ?**IBlob) callconv(mcall) Result,
-        specializeType: *const fn (this: *ISession, type: *TypeReflection, specializationArgs: [*]const SpecializationArg, specializationArgCount: i64, out_diagnostics: ?**IBlob) callconv(mcall) *TypeReflection,
-        getTypeLayout: *const fn (this: *ISession, type: *TypeReflection, targetIndex: i64, rules: LayoutRules, out_diagnostics: ?**IBlob) callconv(mcall) *TypeLayoutReflection,
-        getContainerType: *const fn (this: *ISession, elementType: *TypeReflection, containerType: ContainerType, out_diagnostics: ?**IBlob) callconv(mcall) *TypeReflection,
+        createCompositeComponentType: *const fn (this: *ISession, component_types: [*]const *IComponentType, component_type_count: i64, out_composite_component_type: **IComponentType, out_diagnostics: ?**IBlob) callconv(mcall) Result,
+        specializeType: *const fn (this: *ISession, type: *TypeReflection, specialization_args: [*]const SpecializationArg, specialization_arg_count: i64, out_diagnostics: ?**IBlob) callconv(mcall) *TypeReflection,
+        getTypeLayout: *const fn (this: *ISession, type: *TypeReflection, target_index: i64, rules: LayoutRules, out_diagnostics: ?**IBlob) callconv(mcall) *TypeLayoutReflection,
+        getContainerType: *const fn (this: *ISession, element_type: *TypeReflection, container_type: ContainerType, out_diagnostics: ?**IBlob) callconv(mcall) *TypeReflection,
         getDynamicType: *const fn (this: *ISession) callconv(mcall) *TypeReflection,
         getTypeRTTIMangledName: *const fn (this: *ISession, type: *TypeReflection, out_name_blob: **IBlob) callconv(mcall) Result,
-        getTypeConformanceWitnessMangledName: *const fn (this: *ISession, type: *TypeReflection, interfaceType: *TypeReflection, out_name_blob: **IBlob) callconv(mcall) Result,
-        getTypeConformanceWitnessSequentialID: *const fn (this: *ISession, type: *TypeReflection, interfaceType: *TypeReflection, out_id: *u32) callconv(mcall) Result,
+        getTypeConformanceWitnessMangledName: *const fn (this: *ISession, type: *TypeReflection, interface_type: *TypeReflection, out_name_blob: **IBlob) callconv(mcall) Result,
+        getTypeConformanceWitnessSequentialID: *const fn (this: *ISession, type: *TypeReflection, interface_type: *TypeReflection, out_id: *u32) callconv(mcall) Result,
         createCompileRequest: *const fn (this: *ISession, out_compile_request: **ICompileRequest) callconv(mcall) Result,
-        createTypeConformanceComponentType: *const fn (this: *ISession, type: *TypeReflection, interfaceType: *TypeReflection, out_conformance: **ITypeConformance, conformanceIdOverride: i64, out_diagnostics: ?**IBlob) callconv(mcall) Result,
+        createTypeConformanceComponentType: *const fn (this: *ISession, type: *TypeReflection, interface_type: *TypeReflection, out_conformance: **ITypeConformance, conformance_id_override: i64, out_diagnostics: ?**IBlob) callconv(mcall) Result,
         loadModuleFromIRBlob: *const fn (this: *ISession, module_name: [*:0]const u8, path: [*:0]const u8, source: *IBlob, out_diagnostics: ?**IBlob) callconv(mcall) ?*IModule,
         getLoadedModuleCount: *const fn (this: *ISession) callconv(mcall) i64,
         getLoadedModule: *const fn (this: *ISession, index: i64) callconv(mcall) *IModule,
-        isBinaryModuleUpToDate: *const fn (this: *ISession, modulePath: [*:0]const u8, binaryModuleBlob: *IBlob) callconv(mcall) bool,
+        isBinaryModuleUpToDate: *const fn (this: *ISession, module_path: [*:0]const u8, binary_module_blob: *IBlob) callconv(mcall) bool,
         loadModuleFromSourceString: *const fn (this: *ISession, module_name: [*:0]const u8, path: [*:0]const u8, str: [*:0]const u8, out_diagnostics: ?**IBlob) callconv(mcall) ?*IModule,
-        getDynamicObjectRTTIBytes: *const fn (this: *ISession, type: *TypeReflection, interfaceType: *TypeReflection, out_rtti_data_buffer: [*]u32, bufferSizeInBytes: u32) callconv(mcall) Result,
+        getDynamicObjectRTTIBytes: *const fn (this: *ISession, type: *TypeReflection, interface_type: *TypeReflection, out_rtti_data_buffer: [*]u32, buffer_size_in_bytes: u32) callconv(mcall) Result,
         loadModuleInfoFromIRBlob: *const fn (this: *ISession, source: *IBlob, out_module_version: *i64, out_module_compiler_version: *[*:0]const u8, out_module_name: *[*:0]const u8) callconv(mcall) Result,
     };
 
@@ -3101,14 +2482,18 @@ pub const ISession = extern struct {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.loadModule(@ptrCast(self), module_name, diagnostics);
+                const module = vtable.loadModule(@ptrCast(self), module_name, diagnostics) orelse return null;
+                module.addRef();
+                return module;
             }
 
             fn loadModuleFromSourceBlob(self: *T, module_name: [*:0]const u8, path: [*:0]const u8, source: *IBlob, out_diagnostics: ?**IBlob) ?*IModule {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.loadModuleFromSource(@ptrCast(self), module_name, path, source, diagnostics);
+                const module = vtable.loadModuleFromSource(@ptrCast(self), module_name, path, source, diagnostics) orelse return null;
+                module.addRef();
+                return module;
             }
 
             fn createCompositeComponentType(self: *T, component_types: []const *IComponentType, out_diagnostics: ?**IBlob) !*IComponentType {
@@ -3127,18 +2512,18 @@ pub const ISession = extern struct {
                 return vtable.specializeType(@ptrCast(self), type_, specialization_args.ptr, @intCast(specialization_args.len), diagnostics);
             }
 
-            fn getTypeLayout(self: *T, type_: *TypeReflection, targetIndex: i64, rules: LayoutRules, out_diagnostics: ?**IBlob) *TypeLayoutReflection {
+            fn getTypeLayout(self: *T, type_: *TypeReflection, target_index: i64, rules: LayoutRules, out_diagnostics: ?**IBlob) *TypeLayoutReflection {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.getTypeLayout(@ptrCast(self), type_, targetIndex, rules, diagnostics);
+                return vtable.getTypeLayout(@ptrCast(self), type_, target_index, rules, diagnostics);
             }
 
-            fn getContainerType(self: *T, elementType: *TypeReflection, containerType: ContainerType, out_diagnostics: ?**IBlob) *TypeReflection {
+            fn getContainerType(self: *T, element_type: *TypeReflection, container_type: ContainerType, out_diagnostics: ?**IBlob) *TypeReflection {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.getContainerType(@ptrCast(self), elementType, containerType, diagnostics);
+                return vtable.getContainerType(@ptrCast(self), element_type, container_type, diagnostics);
             }
 
             fn getDynamicType(self: *T) *TypeReflection {
@@ -3153,17 +2538,17 @@ pub const ISession = extern struct {
                 return name_blob;
             }
 
-            fn getTypeConformanceWitnessMangledName(self: *T, type_: *TypeReflection, interfaceType: *TypeReflection) !*IBlob {
+            fn getTypeConformanceWitnessMangledName(self: *T, type_: *TypeReflection, interface_type: *TypeReflection) !*IBlob {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var name_blob: *IBlob = undefined;
-                try vtable.getTypeConformanceWitnessMangledName(@ptrCast(self), type_, interfaceType, &name_blob).check();
+                try vtable.getTypeConformanceWitnessMangledName(@ptrCast(self), type_, interface_type, &name_blob).check();
                 return name_blob;
             }
 
-            fn getTypeConformanceWitnessSequentialID(self: *T, type_: *TypeReflection, interfaceType: *TypeReflection) !u32 {
+            fn getTypeConformanceWitnessSequentialID(self: *T, type_: *TypeReflection, interface_type: *TypeReflection) !u32 {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var id: u32 = undefined;
-                try vtable.getTypeConformanceWitnessSequentialID(@ptrCast(self), type_, interfaceType, &id).check();
+                try vtable.getTypeConformanceWitnessSequentialID(@ptrCast(self), type_, interface_type, &id).check();
                 return id;
             }
 
@@ -3174,12 +2559,12 @@ pub const ISession = extern struct {
                 return compile_request;
             }
 
-            fn createTypeConformanceComponentType(self: *T, type_: *TypeReflection, interfaceType: *TypeReflection, conformanceIdOverride: i64, out_diagnostics: ?**IBlob) !*ITypeConformance {
+            fn createTypeConformanceComponentType(self: *T, type_: *TypeReflection, interface_type: *TypeReflection, conformance_id_override: i64, out_diagnostics: ?**IBlob) !*ITypeConformance {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var conformance: *ITypeConformance = undefined;
-                try vtable.createTypeConformanceComponentType(@ptrCast(self), type_, interfaceType, &conformance, conformanceIdOverride, diagnostics).check();
+                try vtable.createTypeConformanceComponentType(@ptrCast(self), type_, interface_type, &conformance, conformance_id_override, diagnostics).check();
                 return conformance;
             }
 
@@ -3187,7 +2572,9 @@ pub const ISession = extern struct {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.loadModuleFromIRBlob(@ptrCast(self), module_name, path, source, diagnostics);
+                const module = vtable.loadModuleFromIRBlob(@ptrCast(self), module_name, path, source, diagnostics) orelse return null;
+                module.addRef();
+                return module;
             }
 
             fn getLoadedModuleCount(self: *T) usize {
@@ -3195,26 +2582,29 @@ pub const ISession = extern struct {
                 return @intCast(vtable.getLoadedModuleCount(@ptrCast(self)));
             }
 
+            /// The returned module should not be manually released
             fn getLoadedModule(self: *T, index: i64) *IModule {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 return vtable.getLoadedModule(@ptrCast(self), index);
             }
 
-            fn isBinaryModuleUpToDate(self: *T, modulePath: [*:0]const u8, binaryModuleBlob: *IBlob) bool {
+            fn isBinaryModuleUpToDate(self: *T, module_path: [*:0]const u8, binary_module_blob: *IBlob) bool {
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.isBinaryModuleUpToDate(@ptrCast(self), modulePath, binaryModuleBlob);
+                return vtable.isBinaryModuleUpToDate(@ptrCast(self), module_path, binary_module_blob);
             }
 
             fn loadModuleFromSourceString(self: *T, module_name: [:0]const u8, path: [:0]const u8, source_str: [:0]const u8, out_diagnostics: ?**IBlob) ?*IModule {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.loadModuleFromSourceString(@ptrCast(self), module_name.ptr, path.ptr, source_str.ptr, diagnostics);
+                const module = vtable.loadModuleFromSourceString(@ptrCast(self), module_name.ptr, path.ptr, source_str.ptr, diagnostics) orelse return null;
+                module.addRef();
+                return module;
             }
 
-            fn getDynamicObjectRTTIBytes(self: *T, type_: *TypeReflection, interfaceType: *TypeReflection, out_rtti_data_buffer: []u32) !void {
+            fn getDynamicObjectRTTIBytes(self: *T, type_: *TypeReflection, interface_type: *TypeReflection, out_rtti_data_buffer: []u32) !void {
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                try vtable.getDynamicObjectRTTIBytes(@ptrCast(self), type_, interfaceType, out_rtti_data_buffer.ptr, @intCast(out_rtti_data_buffer.len)).check();
+                try vtable.getDynamicObjectRTTIBytes(@ptrCast(self), type_, interface_type, out_rtti_data_buffer.ptr, @intCast(out_rtti_data_buffer.len)).check();
             }
 
             fn loadModuleInfoFromIRBlob(self: *T, source: *IBlob) !LoadModuleInfoFromIRBlobResult {
@@ -3241,16 +2631,16 @@ pub const IMetadata = extern struct {
 
     const VTable = extern struct {
         base: ICastable.VTable,
-        isParameterLocationUsed: *const fn (this: *IMetadata, category: ParameterCategory, spaceIndex: u64, registerIndex: u64, out_used: *bool) callconv(mcall) Result,
+        isParameterLocationUsed: *const fn (this: *IMetadata, category: ParameterCategory, space_index: u64, register_index: u64, out_used: *bool) callconv(mcall) Result,
         getDebugBuildIdentifier: *const fn (this: *IMetadata) callconv(mcall) [*:0]const u8,
     };
 
     fn Mixin(comptime T: type) type {
         return struct {
-            fn isParameterLocationUsed(self: *T, category: ParameterCategory, spaceIndex: u64, registerIndex: u64) !bool {
+            fn isParameterLocationUsed(self: *T, category: ParameterCategory, space_index: u64, register_index: u64) !bool {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var used: *bool = undefined;
-                try vtable.isParameterLocationUsed(@ptrCast(self), category, spaceIndex, registerIndex, &used).check();
+                try vtable.isParameterLocationUsed(@ptrCast(self), category, space_index, register_index, &used).check();
                 return used;
             }
 
@@ -3354,11 +2744,11 @@ pub const IComponentType = extern struct {
                 return vtable.getSession(@ptrCast(self));
             }
 
-            fn getLayout(self: *T, targetIndex: i64, out_diagnostics: ?**IBlob) ?*ProgramLayout {
+            fn getLayout(self: *T, target_index: i64, out_diagnostics: ?**IBlob) ?*ProgramLayout {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
-                return vtable.getLayout(@ptrCast(self), targetIndex, diagnostics);
+                return vtable.getLayout(@ptrCast(self), target_index, diagnostics);
             }
 
             fn getSpecializationParamCount(self: *T) usize {
@@ -3366,26 +2756,26 @@ pub const IComponentType = extern struct {
                 return @intCast(vtable.getSpecializationParamCount(@ptrCast(self)));
             }
 
-            fn getEntryPointCode(self: *T, entryPointIndex: i64, targetIndex: i64, out_diagnostics: ?**IBlob) !*IBlob {
+            fn getEntryPointCode(self: *T, entry_point_index: i64, target_index: i64, out_diagnostics: ?**IBlob) !*IBlob {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var code: *IBlob = undefined;
-                try vtable.getEntryPointCode(@ptrCast(self), entryPointIndex, targetIndex, &code, diagnostics).check();
+                try vtable.getEntryPointCode(@ptrCast(self), entry_point_index, target_index, &code, diagnostics).check();
                 return code;
             }
 
-            fn getResultAsFileSystem(self: *T, entryPointIndex: i64, targetIndex: i64) !*IMutableFileSystem {
+            fn getResultAsFileSystem(self: *T, entry_point_index: i64, target_index: i64) !*IMutableFileSystem {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var file_system: *IMutableFileSystem = undefined;
-                try vtable.getResultAsFileSystem(@ptrCast(self), entryPointIndex, targetIndex, &file_system).check();
+                try vtable.getResultAsFileSystem(@ptrCast(self), entry_point_index, target_index, &file_system).check();
                 return file_system;
             }
 
-            fn getEntryPointHash(self: *T, entryPointIndex: i64, targetIndex: i64) *IBlob {
+            fn getEntryPointHash(self: *T, entry_point_index: i64, target_index: i64) *IBlob {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var hash: *IBlob = undefined;
-                try vtable.getEntryPointHash(@ptrCast(self), entryPointIndex, targetIndex, &hash).check();
+                try vtable.getEntryPointHash(@ptrCast(self), entry_point_index, target_index, &hash).check();
                 return hash;
             }
 
@@ -3407,19 +2797,19 @@ pub const IComponentType = extern struct {
                 return linked_component_type;
             }
 
-            fn getEntryPointHostCallable(self: *T, entryPointIndex: i32, targetIndex: i32, out_diagnostics: ?**IBlob) !*ISharedLibrary {
+            fn getEntryPointHostCallable(self: *T, entry_point_index: i32, target_index: i32, out_diagnostics: ?**IBlob) !*ISharedLibrary {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var shared_library: *ISharedLibrary = undefined;
-                try vtable.getEntryPointHostCallable(@ptrCast(self), entryPointIndex, targetIndex, &shared_library, diagnostics).check();
+                try vtable.getEntryPointHostCallable(@ptrCast(self), entry_point_index, target_index, &shared_library, diagnostics).check();
                 return shared_library;
             }
 
-            fn renameEntryPoint(self: *T, newName: [*:0]const u8) !*IComponentType {
+            fn renameEntryPoint(self: *T, new_name: [*:0]const u8) !*IComponentType {
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var entry_point: *IComponentType = undefined;
-                try vtable.renameEntryPoint(@ptrCast(self), newName, &entry_point).check();
+                try vtable.renameEntryPoint(@ptrCast(self), new_name, &entry_point).check();
                 return entry_point;
             }
 
@@ -3432,30 +2822,30 @@ pub const IComponentType = extern struct {
                 return linked_component_type;
             }
 
-            fn getTargetCode(self: *T, targetIndex: i64, out_diagnostics: ?**IBlob) !*IBlob {
+            fn getTargetCode(self: *T, target_index: i64, out_diagnostics: ?**IBlob) !*IBlob {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var code: *IBlob = undefined;
-                try vtable.getTargetCode(@ptrCast(self), targetIndex, &code, diagnostics).check();
+                try vtable.getTargetCode(@ptrCast(self), target_index, &code, diagnostics).check();
                 return code;
             }
 
-            fn getTargetMetadata(self: *T, targetIndex: i64, out_diagnostics: ?**IBlob) !*IMetadata {
+            fn getTargetMetadata(self: *T, target_index: i64, out_diagnostics: ?**IBlob) !*IMetadata {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var metadata: *IMetadata = undefined;
-                try vtable.getTargetMetadata(@ptrCast(self), targetIndex, &metadata, diagnostics).check();
+                try vtable.getTargetMetadata(@ptrCast(self), target_index, &metadata, diagnostics).check();
                 return metadata;
             }
 
-            fn getEntryPointMetadata(self: *T, entryPointIndex: i64, targetIndex: i64, out_diagnostics: ?**IBlob) !*IMetadata {
+            fn getEntryPointMetadata(self: *T, entry_point_index: i64, target_index: i64, out_diagnostics: ?**IBlob) !*IMetadata {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var metadata: *IMetadata = undefined;
-                try vtable.getEntryPointMetadata(@ptrCast(self), entryPointIndex, targetIndex, &metadata, diagnostics).check();
+                try vtable.getEntryPointMetadata(@ptrCast(self), entry_point_index, target_index, &metadata, diagnostics).check();
                 return metadata;
             }
         };
@@ -3484,6 +2874,7 @@ pub const IEntryPoint = extern struct {
     pub const getTargetCode = IComponentType.Mixin(@This()).getTargetCode;
     pub const getTargetMetadata = IComponentType.Mixin(@This()).getTargetMetadata;
     pub const getEntryPointMetadata = IComponentType.Mixin(@This()).getEntryPointMetadata;
+    pub const getFunctionReflection = IEntryPoint.Mixin(@This()).getFunctionReflection;
 
     const VTable = extern struct {
         base: IComponentType.VTable,
@@ -3522,27 +2913,27 @@ pub const IComponentType2 = extern struct {
 
     const VTable = extern struct {
         base: IUnknown.VTable,
-        getTargetCompileResult: *const fn (this: *IComponentType2, targetIndex: i64, out_compile_result: **ICompileResult, out_diagnostics: ?**IBlob) callconv(mcall) Result,
-        getEntryPointCompileResult: *const fn (this: *IComponentType2, entryPointIndex: i64, targetIndex: i64, out_compile_result: **ICompileResult, out_diagnostics: ?**IBlob) callconv(mcall) Result,
+        getTargetCompileResult: *const fn (this: *IComponentType2, target_index: i64, out_compile_result: **ICompileResult, out_diagnostics: ?**IBlob) callconv(mcall) Result,
+        getEntryPointCompileResult: *const fn (this: *IComponentType2, entry_point_index: i64, target_index: i64, out_compile_result: **ICompileResult, out_diagnostics: ?**IBlob) callconv(mcall) Result,
     };
 
     fn Mixin(comptime T: type) type {
         return struct {
-            fn getTargetCompileResult(self: *T, targetIndex: i64, out_diagnostics: ?**IBlob) !*ICompileResult {
+            fn getTargetCompileResult(self: *T, target_index: i64, out_diagnostics: ?**IBlob) !*ICompileResult {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var compile_result: *ICompileResult = undefined;
-                try vtable.getTargetCompileResult(@ptrCast(self), targetIndex, &compile_result, diagnostics).check();
+                try vtable.getTargetCompileResult(@ptrCast(self), target_index, &compile_result, diagnostics).check();
                 return compile_result;
             }
 
-            fn getEntryPointCompileResult(self: *T, entryPointIndex: i64, targetIndex: i64, out_diagnostics: ?**IBlob) callconv(mcall) !*ICompileResult {
+            fn getEntryPointCompileResult(self: *T, entry_point_index: i64, target_index: i64, out_diagnostics: ?**IBlob) callconv(mcall) !*ICompileResult {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
                 const vtable: *const VTable = @ptrCast(self.vtable);
                 var compile_result: *ICompileResult = undefined;
-                try vtable.getEntryPointCompileResult(@ptrCast(self), entryPointIndex, targetIndex, &compile_result, diagnostics).check();
+                try vtable.getEntryPointCompileResult(@ptrCast(self), entry_point_index, target_index, &compile_result, diagnostics).check();
                 return compile_result;
             }
         };
@@ -3556,11 +2947,7 @@ pub const IModule = extern struct {
 
     pub const queryInterface = IUnknown.Mixin(@This()).queryInterface;
     pub const addRef = IUnknown.Mixin(@This()).addRef;
-    /// NOTE: Slang seems to only ever return non-owning pointers to `IModule`s, so to avoid double
-    /// frees, the easiest solution is to just remove this method. If this situation ever changes,
-    /// the refcount of the returned objects will need to be artificially incremented inside the
-    /// function that return them to make it safe to defer release them.
-    // pub const release = IUnknown.Mixin(@This()).release;
+    pub const release = IUnknown.Mixin(@This()).release;
     pub const getSession = IComponentType.Mixin(@This()).getSession;
     pub const getLayout = IComponentType.Mixin(@This()).getLayout;
     pub const getSpecializationParamCount = IComponentType.Mixin(@This()).getSpecializationParamCount;
@@ -3732,6 +3119,7 @@ pub const IModulePrecompileService_Experimental = extern struct {
                 return @intCast(vtable.getModuleDependencyCount(@ptrCast(self)));
             }
 
+            /// The returned module should not be manually released
             fn getModuleDependency(self: *T, dependency_index: i64, out_diagnostics: ?**IBlob) !*IModule {
                 const diagnostics = getDiagnosticsPtr(out_diagnostics);
                 defer logDiagnostics(diagnostics, out_diagnostics);
@@ -3796,11 +3184,9 @@ const GlobalSessionDesc = extern struct {
 /// @param data Pointer to the binary data to store in the blob. Must not be null.
 /// @param size Size of the data in bytes. Must be greater than 0.
 /// @return The created blob on success, or nullptr on failure.
-pub fn createBlob(data: []const u8) *IBlob {
-    return slang_createBlob(data.ptr, data.len);
+pub fn createBlob(data: []const u8) ?*IBlob {
+    return cdef.slang_createBlob(data.ptr, data.len);
 }
-
-extern fn slang_createBlob(data: [*]const u8, size: usize) *IBlob;
 
 /// Create a global session, with the built-in core module.
 ///
@@ -3808,11 +3194,9 @@ extern fn slang_createBlob(data: [*]const u8, size: usize) *IBlob;
 /// @param outGlobalSession (out)The created global session.
 pub fn createGlobalSession2(api_version: i64) !*IGlobalSession {
     var global_session: *IGlobalSession = undefined;
-    try slang_createGlobalSession(api_version, &global_session).check();
+    try cdef.slang_createGlobalSession(api_version, &global_session).check();
     return global_session;
 }
-
-extern fn slang_createGlobalSession(api_version: i64, out_global_session: **IGlobalSession) Result;
 
 /// Create a global session, with the built-in core module.
 ///
@@ -3820,11 +3204,9 @@ extern fn slang_createGlobalSession(api_version: i64, out_global_session: **IGlo
 /// @param outGlobalSession (out)The created global session.
 pub fn createGlobalSession(desc: GlobalSessionDesc) !*IGlobalSession {
     var global_session: *IGlobalSession = undefined;
-    try slang_createGlobalSession2(&desc, &global_session).check();
+    try cdef.slang_createGlobalSession2(&desc, &global_session).check();
     return global_session;
 }
-
-extern fn slang_createGlobalSession2(desc: *const GlobalSessionDesc, out_global_session: **IGlobalSession) Result;
 
 /// Create a global session, but do not set up the core module. The core module can
 /// then be loaded via loadCoreModule or compileCoreModule
@@ -3835,32 +3217,239 @@ extern fn slang_createGlobalSession2(desc: *const GlobalSessionDesc, out_global_
 /// NOTE! API is experimental and not ready for production code
 pub fn createGlobalSessionWithoutCoreModule(api_version: i64) !*IGlobalSession {
     var global_session: *IGlobalSession = undefined;
-    try slang_createGlobalSessionWithoutCoreModule(api_version, &global_session).check();
+    try cdef.slang_createGlobalSessionWithoutCoreModule(api_version, &global_session).check();
     return global_session;
 }
-
-extern fn slang_createGlobalSessionWithoutCoreModule(api_version: i64, out_global_session: **IGlobalSession) Result;
 
 /// Returns a blob that contains the serialized core module.
 /// Returns nullptr if there isn't an embedded core module.
 ///
 /// NOTE! API is experimental and not ready for production code
-pub const getEmbeddedCoreModule = slang_getEmbeddedCoreModule;
-
-extern fn slang_getEmbeddedCoreModule() *IBlob;
+// FIXME: Missing symbol
+// pub const getEmbeddedCoreModule = cdef.slang_getEmbeddedCoreModule;
 
 /// Cleanup all global allocations used by Slang, to prevent memory leak detectors from
 /// reporting them as leaks. This function should only be called after all Slang objects
 /// have been released. No other Slang functions such as `createGlobalSession`
 /// should be called after this function.
-pub const shutdown = slang_shutdown;
-
-extern fn slang_shutdown() void;
+pub const shutdown = cdef.slang_shutdown;
 
 /// Return the last signaled internal error message.
-pub const getLastInternalErrorMessage = slang_getLastInternalErrorMessage;
+pub const getLastInternalErrorMessage = cdef.slang_getLastInternalErrorMessage;
 
-extern fn slang_getLastInternalErrorMessage() [*:0]const u8;
+const cdef = struct {
+    extern fn spGetBuildTagString() [*:0]const u8;
+    extern fn slang_createBlob(data: [*]const u8, size: usize) ?*IBlob;
+    extern fn slang_createGlobalSession(api_version: i64, out_global_session: **IGlobalSession) Result;
+    extern fn slang_createGlobalSession2(desc: *const GlobalSessionDesc, out_global_session: **IGlobalSession) Result;
+    extern fn slang_createGlobalSessionWithoutCoreModule(api_version: i64, out_global_session: **IGlobalSession) Result;
+    extern fn slang_getEmbeddedCoreModule() ?*IBlob;
+    extern fn slang_shutdown() void;
+    extern fn slang_getLastInternalErrorMessage() [*:0]const u8;
+
+    // Attribute
+    extern fn spReflectionUserAttribute_GetName(attrib: *Attribute) [*:0]const u8;
+    extern fn spReflectionUserAttribute_GetArgumentCount(attrib: *Attribute) u32;
+    extern fn spReflectionUserAttribute_GetArgumentType(attrib: *Attribute, index: u32) *TypeReflection;
+    extern fn spReflectionUserAttribute_GetArgumentValueInt(attrib: *Attribute, index: u32, rs: *i32) Result;
+    extern fn spReflectionUserAttribute_GetArgumentValueFloat(attrib: *Attribute, index: u32, rs: *f32) Result;
+    extern fn spReflectionUserAttribute_GetArgumentValueString(attrib: *Attribute, index: u32, out_size: *usize) ?[*]const u8;
+
+    // TypeReflection
+    extern fn spReflectionType_GetKind(self: *TypeReflection) TypeKind;
+    extern fn spReflectionType_GetUserAttributeCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetUserAttribute(self: *TypeReflection, index: u32) *UserAttribute;
+    extern fn spReflectionType_FindUserAttributeByName(self: *TypeReflection, name: [*:0]const u8) *UserAttribute;
+    extern fn spReflectionType_applySpecializations(self: *TypeReflection, generic: *GenericReflection) *TypeReflection;
+    extern fn spReflectionType_GetFieldCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetFieldByIndex(self: *TypeReflection, index: u32) *VariableReflection;
+    extern fn spReflectionType_GetElementCount(self: *TypeReflection) usize;
+    extern fn spReflectionType_GetSpecializedElementCount(self: *TypeReflection, reflection: *ShaderReflection) usize;
+    extern fn spReflectionType_GetElementType(self: *TypeReflection) *TypeReflection;
+    extern fn spReflectionType_GetRowCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetColumnCount(self: *TypeReflection) u32;
+    extern fn spReflectionType_GetScalarType(self: *TypeReflection) ScalarType;
+    extern fn spReflectionType_GetResourceShape(self: *TypeReflection) ResourceShape;
+    extern fn spReflectionType_GetResourceAccess(self: *TypeReflection) ResourceAccess;
+    extern fn spReflectionType_GetResourceResultType(self: *TypeReflection) *TypeReflection;
+    extern fn spReflectionType_GetName(self: *TypeReflection) [*:0]const u8;
+    extern fn spReflectionType_GetFullName(self: *TypeReflection, out_name_blob: **IBlob) Result;
+    extern fn spReflectionType_GetGenericContainer(self: *TypeReflection) *GenericReflection;
+
+    // TypeLayoutReflection
+    extern fn spReflectionTypeLayout_GetType(self: *TypeLayoutReflection) *TypeReflection;
+    extern fn spReflectionTypeLayout_getKind(self: *TypeLayoutReflection) TypeReflection.Kind;
+    extern fn spReflectionTypeLayout_GetSize(self: *TypeLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionTypeLayout_GetStride(self: *TypeLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionTypeLayout_getAlignment(self: *TypeLayoutReflection, category: ParameterCategory) i32;
+    extern fn spReflectionTypeLayout_GetFieldCount(self: *TypeLayoutReflection) u32;
+    extern fn spReflectionTypeLayout_GetFieldByIndex(self: *TypeLayoutReflection, index: u32) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_findFieldIndexByName(self: *TypeLayoutReflection, name_begin: [*]const u8, name_end: [*]const u8) i64;
+    extern fn spReflectionTypeLayout_GetExplicitCounter(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_GetElementStride(self: *TypeLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionTypeLayout_GetElementTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection;
+    extern fn spReflectionTypeLayout_GetElementVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_getContainerVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_GetParameterCategory(self: *TypeLayoutReflection) ParameterCategory;
+    extern fn spReflectionTypeLayout_GetCategoryCount(self: *TypeLayoutReflection) u32;
+    extern fn spReflectionTypeLayout_GetCategoryByIndex(self: *TypeLayoutReflection, index: u32) ParameterCategory;
+    extern fn spReflectionTypeLayout_GetMatrixLayoutMode(self: *TypeLayoutReflection) MatrixLayoutMode;
+    extern fn spReflectionTypeLayout_getGenericParamIndex(self: *TypeLayoutReflection) i32;
+    extern fn spReflectionTypeLayout_getPendingDataTypeLayout(self: *TypeLayoutReflection) *TypeLayoutReflection;
+    extern fn spReflectionTypeLayout_getSpecializedTypePendingDataVarLayout(self: *TypeLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionTypeLayout_getBindingRangeCount(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeType(self: *TypeLayoutReflection, index: i64) BindingType;
+    extern fn spReflectionTypeLayout_isBindingRangeSpecializable(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeBindingCount(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeLeafTypeLayout(self: *TypeLayoutReflection, index: i64) *TypeLayoutReflection;
+    extern fn spReflectionTypeLayout_getBindingRangeLeafVariable(self: *TypeLayoutReflection, index: i64) *VariableReflection;
+    extern fn spReflectionTypeLayout_getBindingRangeImageFormat(self: *TypeLayoutReflection, index: i64) ImageFormat;
+    extern fn spReflectionTypeLayout_getFieldBindingRangeOffset(self: *TypeLayoutReflection, field_index: i64) i64;
+    extern fn spReflectionTypeLayout_getExplicitCounterBindingRangeOffset(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeDescriptorSetIndex(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeFirstDescriptorRangeIndex(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getBindingRangeDescriptorRangeCount(self: *TypeLayoutReflection, index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetCount(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetSpaceOffset(self: *TypeLayoutReflection, set_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeCount(self: *TypeLayoutReflection, set_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeIndexOffset(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeDescriptorCount(self: *TypeLayoutReflection, set_index: i64, range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeType(self: *TypeLayoutReflection, set_index: i64, range_index: i64) BindingType;
+    extern fn spReflectionTypeLayout_getDescriptorSetDescriptorRangeCategory(self: *TypeLayoutReflection, set_index: i64, range_index: i64) ParameterCategory;
+    extern fn spReflectionTypeLayout_getSubObjectRangeCount(self: *TypeLayoutReflection) i64;
+    extern fn spReflectionTypeLayout_getSubObjectRangeBindingRangeIndex(self: *TypeLayoutReflection, sub_object_range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getSubObjectRangeSpaceOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) i64;
+    extern fn spReflectionTypeLayout_getSubObjectRangeOffset(self: *TypeLayoutReflection, sub_object_range_index: i64) *VariableLayoutReflection;
+
+    // VariableReflection
+    extern fn spReflectionVariable_GetName(self: *VariableReflection) [*:0]const u8;
+    extern fn spReflectionVariable_GetType(self: *VariableReflection) *TypeReflection;
+    extern fn spReflectionVariable_FindModifier(self: *VariableReflection, id: ModifierID) *Modifier;
+    extern fn spReflectionVariable_GetUserAttributeCount(self: *VariableReflection) u32;
+    extern fn spReflectionVariable_GetUserAttribute(self: *VariableReflection, index: u32) *UserAttribute;
+    extern fn spReflectionVariable_FindUserAttributeByName(self: *VariableReflection, global_session: *IGlobalSession, name: [*:0]const u8) *UserAttribute;
+    extern fn spReflectionVariable_HasDefaultValue(self: *VariableReflection) bool;
+    extern fn spReflectionVariable_GetDefaultValueInt(self: *VariableReflection, rs: *i64) Result;
+    extern fn spReflectionVariable_GetGenericContainer(self: *VariableReflection) *GenericReflection;
+    extern fn spReflectionVariable_applySpecializations(self: *VariableReflection, generic: *GenericReflection) *VariableReflection;
+
+    // VariableLayoutReflection
+    extern fn spReflectionVariableLayout_GetVariable(self: *VariableLayoutReflection) *VariableReflection;
+    extern fn spReflectionVariableLayout_GetTypeLayout(self: *VariableLayoutReflection) *TypeLayoutReflection;
+    extern fn spReflectionVariableLayout_GetOffset(self: *VariableLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionVariableLayout_GetSpace(self: *VariableLayoutReflection, category: ParameterCategory) usize;
+    extern fn spReflectionVariableLayout_GetImageFormat(self: *VariableLayoutReflection) ImageFormat;
+    extern fn spReflectionVariableLayout_GetSemanticName(self: *VariableLayoutReflection) [*:0]const u8;
+    extern fn spReflectionVariableLayout_GetSemanticIndex(self: *VariableLayoutReflection) usize;
+    extern fn spReflectionVariableLayout_getStage(self: *VariableLayoutReflection) Stage;
+    extern fn spReflectionVariableLayout_getPendingDataLayout(self: *VariableLayoutReflection) *VariableLayoutReflection;
+    extern fn spReflectionParameter_GetBindingIndex(self: *VariableLayoutReflection) u32;
+    extern fn spReflectionParameter_GetBindingSpace(self: *VariableLayoutReflection) u32;
+
+    // FunctionReflection
+    extern fn spReflectionFunction_GetName(self: *FunctionReflection) [*:0]const u8;
+    extern fn spReflectionFunction_FindModifier(self: *FunctionReflection, id: ModifierID) *Modifier;
+    extern fn spReflectionFunction_GetUserAttributeCount(self: *FunctionReflection) u32;
+    extern fn spReflectionFunction_GetUserAttribute(self: *FunctionReflection, index: u32) *UserAttribute;
+    extern fn spReflectionFunction_FindUserAttributeByName(self: *FunctionReflection, global_session: *ISession, name: [*:0]const u8) *UserAttribute;
+    extern fn spReflectionFunction_GetParameterCount(self: *FunctionReflection) u32;
+    extern fn spReflectionFunction_GetParameter(self: *FunctionReflection, index: u32) *VariableReflection;
+    extern fn spReflectionFunction_GetResultType(self: *FunctionReflection) *TypeReflection;
+    extern fn spReflectionFunction_GetGenericContainer(self: *FunctionReflection) *GenericReflection;
+    extern fn spReflectionFunction_applySpecializations(self: *FunctionReflection, generic: *GenericReflection) *FunctionReflection;
+    extern fn spReflectionFunction_specializeWithArgTypes(self: *FunctionReflection, arg_type_count: i64, arg_types: [*]const *TypeReflection) *FunctionReflection;
+    extern fn spReflectionFunction_isOverloaded(self: *FunctionReflection) bool;
+    extern fn spReflectionFunction_getOverloadCount(self: *FunctionReflection) u32;
+    extern fn spReflectionFunction_getOverload(self: *FunctionReflection, index: u32) *FunctionReflection;
+
+    // GenericReflection
+    extern fn spReflectionGeneric_asDecl(self: *GenericReflection) *DeclReflection;
+    extern fn spReflectionGeneric_GetName(self: *GenericReflection) [*:0]const u8;
+    extern fn spReflectionGeneric_GetTypeParameterCount(self: *GenericReflection) u32;
+    extern fn spReflectionGeneric_GetTypeParameter(self: *GenericReflection, index: u32) *VariableReflection;
+    extern fn spReflectionGeneric_GetValueParameterCount(self: *GenericReflection) u32;
+    extern fn spReflectionGeneric_GetValueParameter(self: *GenericReflection, index: u32) *VariableReflection;
+    extern fn spReflectionGeneric_GetTypeParameterConstraintCount(self: *GenericReflection, type_param: *VariableReflection) u32;
+    extern fn spReflectionGeneric_GetTypeParameterConstraintType(self: *GenericReflection, type_param: *VariableReflection, index: u32) *TypeReflection;
+    extern fn spReflectionGeneric_GetInnerKind(self: *GenericReflection) DeclKind;
+    extern fn spReflectionGeneric_GetInnerDecl(self: *GenericReflection) *DeclReflection;
+    extern fn spReflectionGeneric_GetOuterGenericContainer(self: *GenericReflection) *GenericReflection;
+    extern fn spReflectionGeneric_GetConcreteType(self: *GenericReflection, type_param: *VariableReflection) *TypeReflection;
+    extern fn spReflectionGeneric_GetConcreteIntVal(self: *GenericReflection, value_param: *VariableReflection) i64;
+    extern fn spReflectionGeneric_applySpecializations(self: *GenericReflection, generic: *GenericReflection) *GenericReflection;
+
+    // EntryPointReflection
+    extern fn spReflectionEntryPoint_getName(self: *EntryPointReflection) [*:0]const u8;
+    extern fn spReflectionEntryPoint_getNameOverride(self: *EntryPointReflection) [*:0]const u8;
+    extern fn spReflectionEntryPoint_getFunction(self: *EntryPointReflection) *FunctionReflection;
+    extern fn spReflectionEntryPoint_getParameterCount(self: *EntryPointReflection) u32;
+    extern fn spReflectionEntryPoint_getParameterByIndex(self: *EntryPointReflection, index: u32) *VariableLayoutReflection;
+    extern fn spReflectionEntryPoint_getStage(self: *EntryPointReflection) Stage;
+    extern fn spReflectionEntryPoint_getComputeThreadGroupSize(self: *EntryPointReflection, axis_count: u64, out_size_along_axis: *u64) void;
+    extern fn spReflectionEntryPoint_getComputeWaveSize(self: *EntryPointReflection, out_wave_size: *u64) void;
+    extern fn spReflectionEntryPoint_usesAnySampleRateInput(self: *EntryPointReflection) i32;
+    extern fn spReflectionEntryPoint_getVarLayout(self: *EntryPointReflection) *VariableLayoutReflection;
+    extern fn spReflectionEntryPoint_getResultVarLayout(self: *EntryPointReflection) *VariableLayoutReflection;
+    extern fn spReflectionEntryPoint_hasDefaultConstantBuffer(self: *EntryPointReflection) i32;
+
+    // TypeParameterReflection
+    extern fn spReflectionTypeParameter_GetName(self: TypeParameterReflection) [*:0]const u8;
+    extern fn spReflectionTypeParameter_GetIndex(self: TypeParameterReflection) u32;
+    extern fn spReflectionTypeParameter_GetConstraintCount(self: TypeParameterReflection) u32;
+    extern fn spReflectionTypeParameter_GetConstraintByIndex(self: TypeParameterReflection, index: u32) *TypeReflection;
+
+    // ShaderReflection
+    extern fn spReflection_ToJson(self: *ShaderReflection, request: ?*ICompileRequest, out_blob: **IBlob) Result;
+    extern fn spReflection_GetParameterCount(self: *ShaderReflection) u32;
+    extern fn spReflection_GetParameterByIndex(self: *ShaderReflection, index: u32) *VariableLayoutReflection;
+    extern fn spReflection_GetTypeParameterCount(self: *ShaderReflection) u32;
+    extern fn spReflection_GetTypeParameterByIndex(self: *ShaderReflection, index: u32) *TypeParameterReflection;
+    extern fn spReflection_FindTypeParameter(self: *ShaderReflection, name: [*:0]const u8) *TypeParameterReflection;
+    extern fn spReflection_FindTypeByName(self: *ShaderReflection, name: [*:0]const u8) *TypeReflection;
+    extern fn spReflection_GetTypeLayout(self: *ShaderReflection, reflection_type: *TypeReflection, rules: LayoutRules) *TypeLayoutReflection;
+    extern fn spReflection_FindFunctionByName(self: *ShaderReflection, name: [*:0]const u8) *FunctionReflection;
+    extern fn spReflection_FindFunctionByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: [*:0]const u8) *FunctionReflection;
+    extern fn spReflection_FindVarByNameInType(self: *ShaderReflection, refl_type: *TypeReflection, name: [*:0]const u8) *VariableReflection;
+    extern fn spReflection_TryResolveOverloadedFunction(self: *ShaderReflection, candidate_count: u32, candidates: **FunctionReflection) *FunctionReflection;
+    extern fn spReflection_getEntryPointCount(self: *ShaderReflection) u64;
+    extern fn spReflection_getEntryPointByIndex(self: *ShaderReflection, index: u64) *EntryPointReflection;
+    extern fn spReflection_findEntryPointByName(self: *ShaderReflection, name: [*:0]const u8) *EntryPointReflection;
+    extern fn spReflection_getGlobalConstantBufferBinding(self: *ShaderReflection) u64;
+    extern fn spReflection_getGlobalConstantBufferSize(self: *ShaderReflection) usize;
+    extern fn spReflection_specializeType(self: *ShaderReflection, type: *TypeReflection, specialization_arg_count: i64, specialization_args: [*]const *TypeReflection, out_diagnostics: ?**IBlob) *TypeReflection;
+    extern fn spReflection_specializeGeneric(self: *ShaderReflection, generic: *GenericReflection, arg_count: i64, arg_types: [*]const *GenericArgType, args: [*]const *GenericArgReflection, out_diagnostics: ?**IBlob) *GenericReflection;
+    extern fn spReflection_isSubType(self: *ShaderReflection, sub_type: *TypeReflection, super_type: *TypeReflection) bool;
+    extern fn spReflection_getHashedStringCount(self: *ShaderReflection) u64;
+
+    /// Get a hashed string. The number of chars is written in outCount.
+    /// The count does **NOT including terminating 0. The returned string will be 0 terminated.
+    extern fn spReflection_getHashedString(self: *ShaderReflection, index: u64, out_count: *usize) [*:0]const u8;
+    extern fn spReflection_getGlobalParamsTypeLayout(self: *ShaderReflection) *TypeLayoutReflection;
+    extern fn spReflection_getGlobalParamsVarLayout(self: *ShaderReflection) *VariableLayoutReflection;
+    extern fn spReflection_GetSession(self: *ShaderReflection) *ISession;
+    extern fn spGetReflection(request: *ICompileRequest) *ShaderReflection;
+
+    // DeclReflection
+    extern fn spReflectionDecl_getChildrenCount(self: *DeclReflection) u32;
+    extern fn spReflectionDecl_getChild(self: *DeclReflection, index: u32) *DeclReflection;
+    extern fn spReflectionDecl_getName(self: *DeclReflection) [*:0]const u8;
+    extern fn spReflectionDecl_getKind(self: *DeclReflection) DeclKind;
+    extern fn spReflectionDecl_castToFunction(self: *DeclReflection) *FunctionReflection;
+    extern fn spReflectionDecl_castToVariable(self: *DeclReflection) ?*VariableReflection;
+    extern fn spReflectionDecl_castToGeneric(self: *DeclReflection) *GenericReflection;
+    extern fn spReflection_getTypeFromDecl(self: *DeclReflection) *TypeReflection;
+    extern fn spReflectionDecl_getParent(self: *DeclReflection) *DeclReflection;
+    extern fn spReflectionDecl_findModifier(self: *DeclReflection, id: ModifierID) *Modifier;
+
+    // ISession
+    extern fn slang_loadModuleFromSource(session: *ISession, module_name: [*:0]const u8, path: [*:0]const u8, source: [*:0]const u8, source_size: usize, out_diagnostics: ?**IBlob) ?*IModule;
+    extern fn slang_loadModuleFromIRBlob(session: *ISession, module_name: [*:0]const u8, path: [*:0]const u8, source: [*]const u8, source_size: usize, out_diagnostics: ?**IBlob) ?*IModule;
+    extern fn slang_loadModuleInfoFromIRBlob(session: *ISession, source: [*]const u8, source_size: usize, out_module_version: *i64, out_module_compiler_version: *[*:0]const u8, out_module_name: *[*:0]const u8) Result;
+};
+
+test "check" {
+    std.testing.refAllDecls(@This());
+}
 
 test "compile" {
     const global_session = try createGlobalSession(.{});
@@ -3883,6 +3472,8 @@ test "compile" {
     defer session.release();
 
     const module = session.loadModule("test.slang", null) orelse return error.ModuleLoadFailed;
+    defer module.release();
+
     const entry_point = try module.findEntryPointByName("computeMain");
     defer entry_point.release();
 
@@ -3938,8 +3529,8 @@ test "vtables and argument passing" {
     var seed: u64 = undefined;
     try std.posix.getrandom(std.mem.asBytes(&seed));
     var rng = Rng.init(seed);
-    // TODO: I think there is a way to only show stderr after an error occured
-    std.debug.print("Seed for this run was 0x{X}\n", .{seed});
+    // TODO: I think there is a way to print this only if the test failed
+    std.log.info("Seed for this run was 0x{X}\n", .{seed});
 
     try testSlangVTable("IUnknown", &rng);
     try testSlangVTable("ICastable", &rng);
@@ -3970,21 +3561,23 @@ fn testSlangVTable(comptime interface_name: []const u8, rng: *Rng) !void {
 
 fn testSlangVTableImpl(vtable: anytype, this: anytype, type_name: []const u8, rng: *Rng) !void {
     inline for (std.meta.fields(@TypeOf(vtable))) |field| {
-        const foo = @field(vtable, field.name);
         switch (@typeInfo(field.type)) {
-            .@"struct" => try testSlangVTableImpl(foo, this, type_name, rng),
+            .@"struct" => {
+                const base_vtable = @field(vtable, field.name);
+                try testSlangVTableImpl(base_vtable, this, type_name, rng);
+            },
             .pointer => for (0..FUNC_ITER_COUNT) |_| {
-                try testSlangFunction(foo, @ptrCast(this), type_name, field.name, rng);
+                const fn_ptr = @field(vtable, field.name);
+                try testSlangFunction(fn_ptr, @ptrCast(this), type_name, field.name, rng);
             },
             else => unreachable,
         }
     }
 }
 
-fn testSlangFunction(func: anytype, this: *anyopaque, type_name: []const u8, func_name: []const u8, rng: *Rng) !void {
-    const F = std.meta.Child(@TypeOf(func));
-    const Args = functionArgTuple(F);
-    var args: Args = undefined;
+fn testSlangFunction(fn_ptr: anytype, this: *anyopaque, type_name: []const u8, func_name: []const u8, rng: *Rng) !void {
+    const F = std.meta.Child(@TypeOf(fn_ptr));
+    var args: std.meta.ArgsTuple(F) = undefined;
 
     var zig_args_buffer: [1024]u8 = undefined;
     var zig_args: std.ArrayList(u8) = .initBuffer(&zig_args_buffer);
@@ -3992,45 +3585,13 @@ fn testSlangFunction(func: anytype, this: *anyopaque, type_name: []const u8, fun
     try zig_args.appendBounded('.');
     try zig_args.appendSliceBounded(func_name);
 
-    inline for (@typeInfo(F).@"fn".params, 0..) |param, i| {
-        if (i == 0) {
-            args[i] = @ptrCast(@alignCast(this));
-        } else {
-            args[i] = getRandomValue(param.type.?, rng);
-        }
+    args[0] = @ptrCast(@alignCast(this));
+    try zig_args.appendSliceBounded(std.mem.asBytes(&args[0]));
+
+    inline for (1..@typeInfo(F).@"fn".params.len) |i| {
+        rng.fill(std.mem.asBytes(&args[i]));
         try zig_args.appendSliceBounded(std.mem.asBytes(&args[i]));
     }
-    _ = @call(.auto, func, args);
+    _ = @call(.auto, fn_ptr, args); // We are only interested in the side effects
     try std.testing.expectEqualSlices(u8, slang_args_buffer[0..slang_args_buffer_end], zig_args.items);
-}
-
-fn getRandomValue(comptime T: type, rng: *Rng) T {
-    var result: T = undefined;
-    rng.fill(std.mem.asBytes(&result));
-    return result;
-}
-
-fn functionArgTuple(comptime F: type) type {
-    const params = @typeInfo(F).@"fn".params;
-    const names = [8][:0]const u8{ "0", "1", "2", "3", "4", "5", "6", "7" };
-    comptime var fields: [8]std.builtin.Type.StructField = undefined;
-
-    inline for (params, 0..) |param, i| {
-        std.debug.assert(param.is_generic == false);
-        fields[i] = .{
-            .name = names[i],
-            .type = param.type.?,
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(param.type.?),
-        };
-    }
-    return @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = fields[0..params.len],
-            .decls = &.{},
-            .is_tuple = true,
-        },
-    });
 }

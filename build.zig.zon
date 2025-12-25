@@ -6,17 +6,17 @@
     .dependencies = .{
         .@"slang-linux-aarch64-debug-info" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-linux-aarch64-debug-info.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "N-V-__8AALgSaRBMn19njvtn1txj_xDxNOTgbfz0TXV4NgoR",
             .lazy = true,
         },
         .@"slang-linux-x86_64-debug-info" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-linux-x86_64-debug-info.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "N-V-__8AAPBvtRBDokmm-7y_uhMrU3pK8xG3LClNN8PIH0aJ",
             .lazy = true,
         },
         .@"slang-linux-aarch64" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-linux-aarch64.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "N-V-__8AAJuKHwL6HpMRglzgNZr3wCxgL0r-tNxjEPZK2Wng",
             .lazy = true,
         },
         .@"slang-linux-x86_64" = .{
@@ -26,42 +26,42 @@
         },
         .@"slang-macos-aarch64-debug-info" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-macos-aarch64-debug-info.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "N-V-__8AAFIkKAB4ZN9_0UlAY5gNSdiKSkl0zIVqID4KNp9p",
             .lazy = true,
         },
         .@"slang-macos-x86_64-debug-info" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-macos-x86_64-debug-info.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "N-V-__8AAFJkKACWGQ251reun2jbfibV0bdxGM1c3v_CWpLQ",
             .lazy = true,
         },
         .@"slang-macos-aarch64" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-macos-aarch64.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "FIXME",
             .lazy = true,
         },
         .@"slang-macos-x86_64" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-macos-x86_64.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "FIXME",
             .lazy = true,
         },
         .@"slang-windows-aarch64-debug-info" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-windows-aarch64-debug-info.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "N-V-__8AAABwMw8i75ir1R-Y4PG2phHh8-3QQhE4RwJjnfcx",
             .lazy = true,
         },
         .@"slang-windows-x86_64-debug-info" = .{
-            .url = "https:/github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-windows-x86_64-debug-info.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-windows-x86_64-debug-info.tar.gz",
+            .hash = "N-V-__8AAABQ5A6RGO8v0LIgnLIsYjbKBFFgrzWZxJULahAw",
             .lazy = true,
         },
         .@"slang-windows-aarch64" = .{
             .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-windows-aarch64.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .hash = "N-V-__8AAB_8BwNXIYtPX6g7bHFaT3M_uBWsSlsAExysKfxb",
             .lazy = true,
         },
         .@"slang-windows-x86_64" = .{
-            .url = "https:/github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-windows-x86_64.tar.gz",
-            .hash = "N-V-__8AAJCrjggoZ2bXaG2cgsqwk5OsriF7yxiYYVgr6CDE",
+            .url = "https://github.com/shader-slang/slang/releases/download/v2025.19.1/slang-2025.19.1-windows-x86_64.tar.gz",
+            .hash = "N-V-__8AAOU4HAf-TpoRnfMYqB99dJ4pRUgToMwu0RVG4Xic",
             .lazy = true,
         },
     },

@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         .link_libcpp = true,
     });
 
+    // Options
     const log_diagnostics = b.option(
         LogDiagnostics,
         "log_diagnostics",
@@ -34,24 +35,23 @@ pub fn build(b: *std.Build) void {
     options.addOption(LogDiagnostics, "log_diagnostics", log_diagnostics);
     mod.addOptions("options", options);
 
-    { // Dependencies
-        const slang_dep_name = b.fmt("slang-{s}-{s}{s}", .{
-            @tagName(target.result.os.tag),
-            @tagName(target.result.cpu.arch),
-            if (is_debug and use_debug_info) "-debug-info" else "",
-        });
-        if (b.lazyDependency(slang_dep_name, .{})) |slang| {
-            mod.addSystemIncludePath(slang.path("include"));
-            mod.addLibraryPath(slang.path("lib"));
-            mod.linkSystemLibrary("slang", .{});
-        }
+    // Dependencies
+    const slang_dep_name = b.fmt("slang-{s}-{s}{s}", .{
+        @tagName(target.result.os.tag),
+        @tagName(target.result.cpu.arch),
+        if (is_debug and use_debug_info) "-debug-info" else "",
+    });
+    if (b.lazyDependency(slang_dep_name, .{})) |slang| {
+        mod.addSystemIncludePath(slang.path("include"));
+        mod.addLibraryPath(slang.path("lib"));
+        mod.linkSystemLibrary("slang", .{});
     }
-    { // Tests
-        const unit_tests = b.addTest(.{ .root_module = mod });
-        unit_tests.root_module.addCSourceFile(.{ .file = b.path("src/abi_test.cpp") });
 
-        const run_tests = b.addRunArtifact(unit_tests);
-        const test_step = b.step("test", "Run tests");
-        test_step.dependOn(&run_tests.step);
-    }
+    // Tests
+    const unit_tests = b.addTest(.{ .root_module = mod });
+    unit_tests.root_module.addCSourceFile(.{ .file = b.path("src/abi_test.cpp") });
+
+    const run_tests = b.addRunArtifact(unit_tests);
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_tests.step);
 }
