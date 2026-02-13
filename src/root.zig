@@ -1736,7 +1736,7 @@ pub const VariableLayoutReflection = opaque {
 
     pub const getTypeLayout = cdef.spReflectionVariableLayout_GetTypeLayout;
 
-    pub fn getCategory(self: *VariableLayoutReflection) *TypeLayoutReflection {
+    pub fn getCategory(self: *VariableLayoutReflection) ParameterCategory {
         return self.getTypeLayout().getParameterCategory();
     }
 
@@ -1744,7 +1744,7 @@ pub const VariableLayoutReflection = opaque {
         return self.getTypeLayout().getCategoryCount();
     }
 
-    pub fn getCategoryByIndex(self: *VariableLayoutReflection, index: u32) *TypeLayoutReflection {
+    pub fn getCategoryByIndex(self: *VariableLayoutReflection, index: u32) ParameterCategory {
         return self.getTypeLayout().getCategoryByIndex(index);
     }
 
@@ -3278,7 +3278,7 @@ const cdef = struct {
 
     // TypeLayoutReflection
     extern fn spReflectionTypeLayout_GetType(self: *TypeLayoutReflection) *TypeReflection;
-    extern fn spReflectionTypeLayout_getKind(self: *TypeLayoutReflection) TypeReflection.Kind;
+    extern fn spReflectionTypeLayout_getKind(self: *TypeLayoutReflection) TypeKind;
     extern fn spReflectionTypeLayout_GetSize(self: *TypeLayoutReflection, category: ParameterCategory) usize;
     extern fn spReflectionTypeLayout_GetStride(self: *TypeLayoutReflection, category: ParameterCategory) usize;
     extern fn spReflectionTypeLayout_getAlignment(self: *TypeLayoutReflection, category: ParameterCategory) i32;
@@ -3339,7 +3339,7 @@ const cdef = struct {
     extern fn spReflectionVariableLayout_GetOffset(self: *VariableLayoutReflection, category: ParameterCategory) usize;
     extern fn spReflectionVariableLayout_GetSpace(self: *VariableLayoutReflection, category: ParameterCategory) usize;
     extern fn spReflectionVariableLayout_GetImageFormat(self: *VariableLayoutReflection) ImageFormat;
-    extern fn spReflectionVariableLayout_GetSemanticName(self: *VariableLayoutReflection) [*:0]const u8;
+    extern fn spReflectionVariableLayout_GetSemanticName(self: *VariableLayoutReflection) ?[*:0]const u8;
     extern fn spReflectionVariableLayout_GetSemanticIndex(self: *VariableLayoutReflection) usize;
     extern fn spReflectionVariableLayout_getStage(self: *VariableLayoutReflection) Stage;
     extern fn spReflectionVariableLayout_getPendingDataLayout(self: *VariableLayoutReflection) *VariableLayoutReflection;
@@ -3393,10 +3393,10 @@ const cdef = struct {
     extern fn spReflectionEntryPoint_hasDefaultConstantBuffer(self: *EntryPointReflection) i32;
 
     // TypeParameterReflection
-    extern fn spReflectionTypeParameter_GetName(self: TypeParameterReflection) [*:0]const u8;
-    extern fn spReflectionTypeParameter_GetIndex(self: TypeParameterReflection) u32;
-    extern fn spReflectionTypeParameter_GetConstraintCount(self: TypeParameterReflection) u32;
-    extern fn spReflectionTypeParameter_GetConstraintByIndex(self: TypeParameterReflection, index: u32) *TypeReflection;
+    extern fn spReflectionTypeParameter_GetName(self: *TypeParameterReflection) [*:0]const u8;
+    extern fn spReflectionTypeParameter_GetIndex(self: *TypeParameterReflection) u32;
+    extern fn spReflectionTypeParameter_GetConstraintCount(self: *TypeParameterReflection) u32;
+    extern fn spReflectionTypeParameter_GetConstraintByIndex(self: *TypeParameterReflection, index: u32) *TypeReflection;
 
     // ShaderReflection
     extern fn spReflection_ToJson(self: *ShaderReflection, request: ?*ICompileRequest, out_blob: **IBlob) Result;
