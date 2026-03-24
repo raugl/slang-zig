@@ -19,8 +19,6 @@ const slang_dep = b.dependency("slang-zig", .{
     // Automatically log any slang diagnostics using `std.log` when providing
     // null as the blob pointer (this is the default)
     .log_diagnostics = .only_for_null,
-    // Only use release builds of slang
-    .debug_info = false,
 });
 exe.root_module.addImport("slang", slang_dep.module("slang"));
 ```
@@ -94,6 +92,7 @@ pub fn main() !void {
     defer diag.release();
 
     const linked_program = program.link(&diag) catch |err| {
+        std.log("[slang] Link error: {s}\n", .{diag.getBuffer()});
         std.debug.print("[slang] Link error: {s}\n", .{diag.getBuffer()});
         return err;
     };
@@ -101,4 +100,4 @@ pub fn main() !void {
 }
 ```
 
-You can find more info on at slang's [official documentation](https://docs.shader-slang.org/en/latest/index.html).
+You can find more info on slang at the [official documentation](https://docs.shader-slang.org/en/latest/index.html).
